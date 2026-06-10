@@ -918,15 +918,34 @@ function assignPerson(personId, key, targetShift) {
   if (!person || !targetShift) return;
   const originDate = draggedSourceDate || key;
   const originShift = draggedSourceShift || targetShift;
-  if (draggedSourceDate) {
-    removePersonFromDay(personId, draggedSourceDate, draggedSourceShift);
-  }
-  removePersonFromDay(personId, key);
+  const sourceSnapshot =
+    draggedSourceDate && draggedSourceShift
+      ? {
+          key: draggedSourceDate,
+          shift: draggedSourceShift,
+          wasFixed: isFixedAssignment(draggedSourceDate, draggedSourceShift, personId),
+        }
+      : null;
 
-  let targetAssignments = getAssignments(key)[targetShift];
+  if (sourceSnapshot && (sourceSnapshot.key !== key || sourceSnapshot.shift !== targetShift)) {
+    removePersonFromDay(personId, sourceSnapshot.key, sourceSnapshot.shift);
+  }
+
+  SHIFT_TYPES.forEach((shift) => {
+    if (shift !== targetShift) removePersonFromDay(personId, key, shift);
+  });
+
+  const targetAssignments = getAssignments(key)[targetShift];
   if (!targetAssignments.includes(personId)) {
     targetAssignments.push(personId);
     setFixedAssignment(key, targetShift, personId, originDate, originShift);
+  }
+
+  const targetHasCard = getAssignments(key)[targetShift].includes(personId);
+  if (!targetHasCard && sourceSnapshot) {
+    const sourceAssignments = getAssignments(sourceSnapshot.key)[sourceSnapshot.shift];
+    if (!sourceAssignments.includes(personId)) sourceAssignments.push(personId);
+    if (sourceSnapshot.wasFixed) setFixedAssignment(sourceSnapshot.key, sourceSnapshot.shift, personId, sourceSnapshot.key, sourceSnapshot.shift);
   }
   saveState();
   renderAll();
@@ -934,8 +953,6 @@ function assignPerson(personId, key, targetShift) {
 
 function addCardByClick(key, targetShift) {
   const options = state.people
-    .filter((person) => !isRestricted(person.id, key))
-    .filter((person) => !(getPersonShift(person) === "Comercial Fixo" && targetShift !== "Comercial"))
     .filter((person) => !getAssignments(key)[targetShift].includes(person.id));
   if (targetShift === "24x72") options.push(findPerson(EMPTY_SLOT_ID));
   if (!options.length) return;
