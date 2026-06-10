@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Escala EVR</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">EVR</span>
+          <div>
+            <h1>Escala EVR</h1>
+            <p>Plantões, folgas e restrições</p>
+          </div>
+        </div>
+
+        <nav class="tabs" aria-label="Navegação principal">
+          <button class="tab-button active" data-tab="calendar">Calendário</button>
+          <button class="tab-button" data-tab="stats">Relatórios</button>
+          <button class="tab-button" data-tab="restrictions">Restrições</button>
+          <button class="tab-button" data-tab="people">Equipe</button>
+        </nav>
+
+        <section class="panel">
+          <div class="panel-title">
+            <h2>Equipe</h2>
+            <span id="available-count">0</span>
+          </div>
+          <div id="available-list" class="person-list drop-zone" data-drop-target="available"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <h2>Ações</h2>
+          </div>
+          <button id="auto-fill" class="primary-action">Preencher 24x72 (Padrão)</button>
+          <button id="optimize-balance" class="primary-action" title="Preenchimento rápido equilibrado">Preencher Inteligente</button>
+          <button id="optimize-complete" class="primary-action" title="Equilibra sem deixar plantonista fora do mês">Inteligente Completo</button>
+          <button id="refine-balance" class="primary-action" title="Refina a escala atual buscando o melhor equilíbrio global">Equilibrar (Global)</button>
+          <button id="undo-action" class="secondary-action" disabled>Desfazer</button>
+          <button id="check-scale" class="secondary-action">Conferir escala</button>
+          <button id="export-data" class="secondary-action">Salvar backup</button>
+          <button id="export-csv" class="secondary-action">Exportar CSV do mês</button>
+          <button id="import-data" class="secondary-action">Carregar backup</button>
+          <button id="restore-legacy" class="secondary-action">Restaurar dados antigos</button>
+          <input id="import-file" type="file" accept="application/json,.json" hidden />
+          <button id="clear-month" class="secondary-action">Limpar mês</button>
+        </section>
+      </aside>
+
+      <main class="main">
+        <section id="calendar-tab" class="tab-page active">
+          <header class="topbar">
+            <div>
+              <p class="eyebrow">Calendário operacional</p>
+              <h2 id="month-title">Mês</h2>
+            </div>
+            <div class="month-controls">
+              <button id="prev-month" class="icon-button" aria-label="Mês anterior">‹</button>
+              <input id="month-picker" type="month" />
+              <button id="next-month" class="icon-button" aria-label="Próximo mês">›</button>
+            </div>
+          </header>
+
+          <div id="calendar-grid" class="scale-table"></div>
+        </section>
+
+        <section id="stats-tab" class="tab-page">
+          <header class="topbar">
+            <div>
+              <p class="eyebrow">Resumo individual</p>
+              <h2>Plantões e folgas</h2>
+            </div>
+          </header>
+          <div id="stats-ranking" class="ranking-panel"></div>
+          <div id="stats-grid" class="stats-grid"></div>
+        </section>
+
+        <section id="restrictions-tab" class="tab-page">
+          <header class="topbar">
+            <div>
+              <p class="eyebrow">Impedimentos</p>
+              <h2>Férias, cursos e outros</h2>
+            </div>
+          </header>
+
+          <form id="restriction-form" class="form-grid">
+            <label>
+              Pessoa
+              <select id="restriction-person" required></select>
+            </label>
+            <label>
+              Tipo
+              <select id="restriction-type">
+                <option>Férias</option>
+                <option>Curso</option>
+                <option>Atestado</option>
+                <option>Outro impedimento</option>
+              </select>
+            </label>
+            <label>
+              Início
+              <input id="restriction-start" type="date" required />
+            </label>
+            <label>
+              Fim
+              <input id="restriction-end" type="date" required />
+            </label>
+            <label class="wide">
+              Observação
+              <input id="restriction-note" type="text" placeholder="Ex.: curso externo, férias aprovadas" />
+            </label>
+            <button class="primary-action" type="submit">Adicionar restrição</button>
+          </form>
+
+          <div class="restriction-toolbar">
+            <label>
+              Mostrar restrições
+              <select id="restriction-filter">
+                <option value="all">Tudo</option>
+              </select>
+            </label>
+          </div>
+
+          <div id="restriction-list" class="restriction-list"></div>
+
+          <form id="holiday-form" class="form-grid holiday-form">
+            <label>
+              Data do feriado
+              <input id="holiday-date" type="date" required />
+            </label>
+            <label class="wide">
+              Nome
+              <input id="holiday-name" type="text" placeholder="Ex.: Corpus Christi, feriado municipal" required />
+            </label>
+            <button class="primary-action" type="submit">Adicionar feriado</button>
+          </form>
+
+          <div id="holiday-list" class="restriction-list"></div>
+        </section>
+
+        <section id="people-tab" class="tab-page">
+          <header class="topbar">
+            <div>
+              <p class="eyebrow">Cadastro</p>
+              <h2>Equipe e regime base</h2>
+            </div>
+          </header>
+
+          <form id="person-form" class="form-grid compact">
+            <label>
+              Nome
+              <input id="person-name" type="text" placeholder="Nome da pessoa" required />
+            </label>
+            <label>
+              Regime base
+              <select id="person-shift">
+                <option value="24x72">24x72</option>
+                <option value="12x36">12x36</option>
+                <option value="Comercial">Comercial</option>
+                <option value="Comercial Fixo">Comercial fixo</option>
+              </select>
+            </label>
+            <button class="primary-action" type="submit">Adicionar pessoa</button>
+          </form>
+
+          <div id="people-list" class="people-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="legacy-data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
