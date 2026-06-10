@@ -46,7 +46,7 @@ currentDate.setDate(1);
 let draggedPersonId = null;
 let draggedSourceDate = null;
 let draggedSourceShift = null;
-let reviewMode = false;
+let reviewMode = true;
 let editingRestrictionId = null;
 let restrictionFilterValue = "all";
 
@@ -710,6 +710,28 @@ function restBalanceLabel(balance) {
   return String(balance);
 }
 
+function cardRuleWarnings(person, key, shift, restBalance = 0) {
+  if (!person || !key || !shift || isEmptySlot(person.id)) return [];
+  const warnings = [];
+  const personShift = getPersonShiftForDate(person, key);
+  if (isRestricted(person.id, key)) {
+    warnings.push("Pessoa possui restrição cadastrada neste dia.");
+  }
+  if (personShift === "Comercial Fixo" && shift !== "Comercial") {
+    warnings.push("Comercial Fixo deve ficar apenas na coluna Comercial.");
+  }
+  if (shift === "24x72" && getAssignments(key)["24x72"].length > 2) {
+    warnings.push("24x72 está com mais de 2 plantonistas neste dia.");
+  }
+  if (reviewMode && restBalance > 0) {
+    warnings.push(`Folga insuficiente: voltou ${restBalance} dia(s) antes do previsto.`);
+  }
+  if (reviewMode && restBalance < 0) {
+    warnings.push(`Folga a mais: voltou ${Math.abs(restBalance)} dia(s) depois do previsto.`);
+  }
+  return warnings;
+}
+
 function personCard(person, subtitle = null, sourceDate = null, sourceShift = null) {
   const personShift = sourceDate ? getPersonShiftForDate(person, sourceDate) : getPersonShift(person);
   const label = subtitle || personShift;
@@ -722,13 +744,16 @@ function personCard(person, subtitle = null, sourceDate = null, sourceShift = nu
   }
   const restBalance = sourceDate && reviewMode ? restBalanceForAssignment(person.id, sourceDate) : 0;
   if (restBalance) card.classList.add("has-rest-alert", restBalanceClass(restBalance));
+  const warnings = sourceDate && sourceShift ? cardRuleWarnings(person, sourceDate, sourceShift, restBalance) : [];
+  if (warnings.length) card.classList.add("has-rule-alert");
   card.draggable = true;
   card.dataset.personId = person.id;
   if (sourceDate) card.dataset.sourceDate = sourceDate;
   if (sourceShift) card.dataset.sourceShift = sourceShift;
   const removeButton = sourceDate ? '<button class="card-remove" type="button" title="Remover card">×</button>' : "";
   const restBadge = restBalance ? `<b class="rest-badge" title="Saldo de folga">${restBalanceLabel(restBalance)}</b>` : "";
-  card.innerHTML = `<strong>${person.name}</strong><span>${label}</span>${restBadge}${removeButton}`;
+  const warningBadge = warnings.length ? `<b class="rule-alert" title="${escapeHtmlValue(warnings.join("\n"))}">!</b>` : "";
+  card.innerHTML = `<strong>${person.name}</strong><span>${label}</span>${restBadge}${warningBadge}${removeButton}`;
   card.querySelector(".card-remove")?.addEventListener("click", (event) => {
     event.stopPropagation();
     removePersonFromDay(person.id, sourceDate, sourceShift);
@@ -890,9 +915,7 @@ function countAssignmentsUntil(personId, targetShift, key) {
 
 function assignPerson(personId, key, targetShift) {
   const person = findPerson(personId);
-  if (!person || !targetShift || isRestricted(personId, key)) return;
-  const personShift = getPersonShift(person);
-  if (personShift === "Comercial Fixo" && targetShift !== "Comercial") return;
+  if (!person || !targetShift) return;
   const originDate = draggedSourceDate || key;
   const originShift = draggedSourceShift || targetShift;
   if (draggedSourceDate) {
@@ -902,11 +925,6 @@ function assignPerson(personId, key, targetShift) {
 
   let targetAssignments = getAssignments(key)[targetShift];
   if (!targetAssignments.includes(personId)) {
-    if (targetShift === "24x72" && targetAssignments.length >= 2) {
-      const victim = targetAssignments.find((id) => !isFixedAssignment(key, targetShift, id)) || targetAssignments[0];
-      removePersonFromDay(victim, key, targetShift);
-      targetAssignments = getAssignments(key)[targetShift];
-    }
     targetAssignments.push(personId);
     setFixedAssignment(key, targetShift, personId, originDate, originShift);
   }
@@ -2600,6 +2618,7 @@ function renderAll() {
   renderPeople();
   renderRestrictions();
   updateUndoButton();
+  if (els.checkScale) els.checkScale.textContent = reviewMode ? "Ocultar conferência" : "Conferir escala";
 }
 
 els.tabs.forEach((button) => {

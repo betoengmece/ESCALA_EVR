@@ -238,6 +238,10 @@ button {
   padding-right: 24px;
 }
 
+.person-card.has-rule-alert {
+  padding-left: 22px;
+}
+
 .person-card.owes-rest {
   background: #fff0f0;
   border-color: rgba(186, 59, 70, 0.75);
@@ -269,6 +273,22 @@ button {
 
 .extra-rest .rest-badge {
   background: var(--blue);
+}
+
+.rule-alert {
+  position: absolute;
+  left: 5px;
+  bottom: 3px;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #f5a000;
+  color: #1b242c;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
 }
 
 .card-remove {
