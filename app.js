@@ -92,7 +92,8 @@ const els = {
 
 function loadState() {
   const saved = localStorage.getItem(STORAGE_KEY);
-  const loaded = saved ? JSON.parse(saved) : structuredClone(defaultState);
+  const initialState = window.INITIAL_ESCALA_STATE || defaultState;
+  const loaded = saved ? JSON.parse(saved) : structuredClone(initialState);
   loaded.people ||= [];
   const isInitialDemoTeam =
     loaded.people.length === 6 && ["p1", "p2", "p3", "p4", "p5", "p6"].every((id) => loaded.people.some((person) => person.id === id));
