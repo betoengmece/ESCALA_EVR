@@ -736,6 +736,11 @@ function restBalanceClass(balance) {
   return "";
 }
 
+function isRestrictionSuspendedRestBalance(personId, key) {
+  const previous = lastAssignmentBefore(personId, key);
+  return Boolean(previous && hasSuspensionBetween(personId, previous.key, key));
+}
+
 function restBalanceLabel(balance) {
   if (balance > 0) return `+${balance}`;
   return String(balance);
@@ -754,10 +759,15 @@ function cardRuleWarnings(person, key, shift, restBalance = 0) {
   if (shift === "24x72" && getAssignments(key)["24x72"].length > 2) {
     warnings.push("24x72 está com mais de 2 plantonistas neste dia.");
   }
-  if (reviewMode && restBalance > 0) {
+  const isSuspendedRest = reviewMode && restBalance && isRestrictionSuspendedRestBalance(person.id, key);
+  if (reviewMode && restBalance > 0 && isSuspendedRest) {
+    warnings.push(`Saldo pós-restrição: voltou ${restBalance} dia(s) antes da folga compensatória.`);
+  } else if (reviewMode && restBalance > 0) {
     warnings.push(`Folga insuficiente: voltou ${restBalance} dia(s) antes do previsto.`);
   }
-  if (reviewMode && restBalance < 0) {
+  if (reviewMode && restBalance < 0 && isSuspendedRest) {
+    warnings.push(`Saldo pós-restrição: voltou ${Math.abs(restBalance)} dia(s) depois da folga compensatória.`);
+  } else if (reviewMode && restBalance < 0) {
     warnings.push(`Folga a mais: voltou ${Math.abs(restBalance)} dia(s) depois do previsto.`);
   }
   return warnings;
@@ -774,7 +784,10 @@ function personCard(person, subtitle = null, sourceDate = null, sourceShift = nu
     card.title = "Card fixo manual";
   }
   const restBalance = sourceDate && reviewMode ? restBalanceForAssignment(person.id, sourceDate) : 0;
-  if (restBalance) card.classList.add("has-rest-alert", restBalanceClass(restBalance));
+  const suspendedRestBalance = sourceDate && reviewMode && restBalance && isRestrictionSuspendedRestBalance(person.id, sourceDate);
+  if (restBalance) {
+    card.classList.add("has-rest-alert", suspendedRestBalance ? "suspended-rest" : restBalanceClass(restBalance));
+  }
   const warnings = sourceDate && sourceShift ? cardRuleWarnings(person, sourceDate, sourceShift, restBalance) : [];
   if (warnings.length) card.classList.add("has-rule-alert");
   card.draggable = true;
@@ -782,7 +795,8 @@ function personCard(person, subtitle = null, sourceDate = null, sourceShift = nu
   if (sourceDate) card.dataset.sourceDate = sourceDate;
   if (sourceShift) card.dataset.sourceShift = sourceShift;
   const removeButton = sourceDate ? '<button class="card-remove" type="button" title="Remover card">×</button>' : "";
-  const restBadge = restBalance ? `<b class="rest-badge" title="Saldo de folga">${restBalanceLabel(restBalance)}</b>` : "";
+  const restBadgeTitle = suspendedRestBalance ? "Saldo de folga pós-restrição manual" : "Saldo de folga";
+  const restBadge = restBalance ? `<b class="rest-badge" title="${restBadgeTitle}">${restBalanceLabel(restBalance)}</b>` : "";
   const warningBadge = warnings.length ? `<b class="rule-alert" title="${escapeHtmlValue(warnings.join("\n"))}">!</b>` : "";
   card.innerHTML = `<strong>${person.name}</strong><span>${label}</span>${restBadge}${warningBadge}${removeButton}`;
   card.querySelector(".card-remove")?.addEventListener("click", (event) => {
