@@ -1,5 +1,7 @@
 const STORAGE_KEY = "escala-evr-v1";
 const UNDO_STORAGE_KEY = "escala-evr-undo-v1";
+const SYNC_META_KEY = "escala-evr-sync-meta-v1";
+const SYNC_ENDPOINT = "https://script.google.com/macros/s/AKfycbwBO_8h__5F1PpugzjocJn9DSzOJD50K7EQ3OSRf6zYoKscaFzRV-itFSS9lQhEw3w5mg/exec";
 const UNDO_LIMIT = 100;
 const UNDO_MAX_BYTES = 1800000;
 const SHIFT_HOURS = {
@@ -41,6 +43,7 @@ const defaultState = {
 
 let state = loadState();
 let undoStack = loadUndoStack();
+let syncMeta = loadSyncMeta();
 let currentDate = new Date();
 currentDate.setDate(1);
 let draggedPersonId = null;
@@ -66,6 +69,9 @@ const els = {
   exportData: document.getElementById("export-data"),
   exportCsv: document.getElementById("export-csv"),
   importData: document.getElementById("import-data"),
+  syncStatus: document.getElementById("sync-status"),
+  syncPull: document.getElementById("sync-pull"),
+  syncPush: document.getElementById("sync-push"),
   restoreLegacy: document.getElementById("restore-legacy"),
   importFile: document.getElementById("import-file"),
   checkScale: document.getElementById("check-scale"),
@@ -122,6 +128,30 @@ function loadUndoStack() {
   } catch (error) {
     return [];
   }
+}
+
+function loadSyncMeta() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SYNC_META_KEY) || "{}");
+    return {
+      version: Number(saved.version || 0),
+      updatedAt: saved.updatedAt || null,
+      lastSyncedAt: saved.lastSyncedAt || null,
+      dirty: Boolean(saved.dirty),
+    };
+  } catch (error) {
+    return { version: 0, updatedAt: null, lastSyncedAt: null, dirty: false };
+  }
+}
+
+function persistSyncMeta() {
+  localStorage.setItem(SYNC_META_KEY, JSON.stringify(syncMeta));
+  updateSyncStatus();
+}
+
+function markSyncDirty() {
+  syncMeta.dirty = true;
+  persistSyncMeta();
 }
 
 function persistUndoStack() {
@@ -195,6 +225,7 @@ function saveState(options = {}) {
   if (shouldKeepUndo) pushUndoSnapshot(previousRawState);
   const saved = writePrimaryState(nextRawState);
   if (saved && shouldKeepUndo) persistUndoStack();
+  if (saved && !options.skipSyncDirty && previousRawState !== nextRawState) markSyncDirty();
   updateUndoButton();
   return saved;
 }
@@ -2161,6 +2192,140 @@ function importBackupFile(file) {
   reader.readAsText(file);
 }
 
+function syncDateLabel(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+}
+
+function updateSyncStatus(message = null, tone = "") {
+  if (!els.syncStatus) return;
+  els.syncStatus.className = tone ? `sync-status ${tone}` : "sync-status";
+  if (message) {
+    els.syncStatus.textContent = message;
+    return;
+  }
+  if (syncMeta.dirty) {
+    els.syncStatus.textContent = `Nuvem: alterações locais${syncMeta.version ? ` (v${syncMeta.version})` : ""}`;
+    els.syncStatus.classList.add("dirty");
+    return;
+  }
+  if (syncMeta.version) {
+    els.syncStatus.textContent = `Nuvem: sincronizado v${syncMeta.version}${syncMeta.updatedAt ? ` - ${syncDateLabel(syncMeta.updatedAt)}` : ""}`;
+    els.syncStatus.classList.add("ok");
+    return;
+  }
+  els.syncStatus.textContent = "Nuvem: não sincronizado";
+}
+
+function setSyncBusy(isBusy) {
+  [els.syncPull, els.syncPush].forEach((button) => {
+    if (button) button.disabled = isBusy;
+  });
+}
+
+async function requestCloudState() {
+  const response = await fetch(`${SYNC_ENDPOINT}?action=load&t=${Date.now()}`, {
+    method: "GET",
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(`Erro HTTP ${response.status}`);
+  const data = await readCloudJson(response);
+  if (!data.ok) throw new Error(data.error || "Resposta inválida da nuvem.");
+  return data;
+}
+
+async function readCloudJson(response) {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    if (text.includes("accounts.google.com") || text.includes("signin")) {
+      throw new Error("Apps Script pediu login. Reimplante o app como acesso: Qualquer pessoa.");
+    }
+    throw new Error("A nuvem não respondeu JSON válido.");
+  }
+}
+
+async function pullFromCloud() {
+  try {
+    setSyncBusy(true);
+    updateSyncStatus("Nuvem: baixando...", "busy");
+    const data = await requestCloudState();
+    if (!data.exists || !data.state) {
+      updateSyncStatus("Nuvem: ainda vazia", "dirty");
+      alert("Ainda não existe escala salva na nuvem. Use Enviar para nuvem primeiro.");
+      return;
+    }
+    if (syncMeta.dirty && !confirm("Existem alterações locais ainda não enviadas. Baixar da nuvem vai substituir este navegador. Continuar?")) {
+      updateSyncStatus();
+      return;
+    }
+    const previousRawState = localStorage.getItem(STORAGE_KEY);
+    if (previousRawState) pushUndoSnapshot(previousRawState);
+    state = normalizeLoadedState(data.state);
+    syncMeta = {
+      version: Number(data.version || 0),
+      updatedAt: data.updatedAt || null,
+      lastSyncedAt: new Date().toISOString(),
+      dirty: false,
+    };
+    persistUndoStack();
+    saveState({ skipUndo: true, skipSyncDirty: true });
+    persistSyncMeta();
+    renderAll();
+    alert("Escala baixada da nuvem com sucesso.");
+  } catch (error) {
+    updateSyncStatus("Nuvem: erro ao baixar", "error");
+    alert(`Não consegui baixar da nuvem. ${error.message || error}`);
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+async function pushToCloud(force = false) {
+  try {
+    setSyncBusy(true);
+    updateSyncStatus("Nuvem: enviando...", "busy");
+    const response = await fetch(SYNC_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        action: "save",
+        state,
+        version: syncMeta.version || 0,
+        force,
+        source: location.href,
+      }),
+    });
+    const data = await readCloudJson(response);
+    if (data.conflict) {
+      setSyncBusy(false);
+      updateSyncStatus(`Nuvem: conflito v${data.currentVersion}`, "error");
+      if (confirm("Existe uma versão mais nova na nuvem. Deseja sobrescrever mesmo assim com esta escala local?")) {
+        await pushToCloud(true);
+      }
+      return;
+    }
+    if (!response.ok || !data.ok) throw new Error(data.error || `Erro HTTP ${response.status}`);
+    syncMeta = {
+      version: Number(data.version || 0),
+      updatedAt: data.updatedAt || null,
+      lastSyncedAt: new Date().toISOString(),
+      dirty: false,
+    };
+    persistSyncMeta();
+    updateSyncStatus("Nuvem: enviado com sucesso", "ok");
+    setTimeout(() => updateSyncStatus(), 1800);
+  } catch (error) {
+    updateSyncStatus("Nuvem: erro ao enviar", "error");
+    alert(`Não consegui enviar para a nuvem. ${error.message || error}`);
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
 function restoreLegacyCsvData() {
   if (!window.LEGACY_CSV_DATA) {
     alert("Não encontrei o arquivo legacy-data.js para restaurar os dados antigos.");
@@ -2636,6 +2801,7 @@ function renderAll() {
   renderRestrictions();
   updateUndoButton();
   if (els.checkScale) els.checkScale.textContent = reviewMode ? "Ocultar conferência" : "Conferir escala";
+  updateSyncStatus();
 }
 
 els.tabs.forEach((button) => {
@@ -2677,6 +2843,8 @@ els.exportData.addEventListener("click", exportBackup);
 els.exportCsv?.addEventListener("click", exportMonthCsv);
 els.importData.addEventListener("click", () => els.importFile.click());
 els.importFile.addEventListener("change", (event) => importBackupFile(event.target.files[0]));
+els.syncPull?.addEventListener("click", pullFromCloud);
+els.syncPush?.addEventListener("click", () => pushToCloud(false));
 els.restoreLegacy?.addEventListener("click", restoreLegacyCsvData);
 els.clearMonth.addEventListener("click", clearCurrentMonth);
 

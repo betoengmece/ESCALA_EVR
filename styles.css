@@ -331,6 +331,34 @@ button {
   color: #fff;
 }
 
+.sync-box {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.sync-status {
+  display: block;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.sync-status.ok {
+  color: #91d6a5;
+}
+
+.sync-status.dirty,
+.sync-status.busy {
+  color: #ffd47a;
+}
+
+.sync-status.error {
+  color: #ff9da4;
+}
+
 .main {
   padding: 24px;
   overflow: auto;
