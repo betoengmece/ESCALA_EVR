@@ -251,9 +251,9 @@ function readPeople() {
 function readAssignments() {
   const assignments = {};
   getRows(SHEETS.assignments)
-    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || Number(a.position || 0) - Number(b.position || 0))
+    .sort((a, b) => formatSheetDate(a.date).localeCompare(formatSheetDate(b.date)) || Number(a.position || 0) - Number(b.position || 0))
     .forEach((row) => {
-      const date = String(row.date || "");
+      const date = formatSheetDate(row.date);
       const shift = String(row.shift || "");
       const personId = String(row.person_id || "");
       if (!date || !["24x72", "12x36", "Comercial"].includes(shift) || !personId) return;
@@ -266,12 +266,12 @@ function readAssignments() {
 function readFixedAssignments() {
   const fixedAssignments = {};
   getRows(SHEETS.fixedAssignments).forEach((row) => {
-    const date = String(row.date || "");
+    const date = formatSheetDate(row.date);
     const shift = String(row.shift || "");
     const personId = String(row.person_id || "");
     if (!date || !shift || !personId) return;
     fixedAssignments[`${date}|${shift}|${personId}`] = {
-      originDate: String(row.origin_date || date),
+      originDate: formatSheetDate(row.origin_date || date),
       originShift: String(row.origin_shift || shift),
     };
   });
@@ -281,7 +281,7 @@ function readFixedAssignments() {
 function readMonthlyShifts() {
   const monthlyShifts = {};
   getRows(SHEETS.monthlyShifts).forEach((row) => {
-    const month = String(row.month || "");
+    const month = formatSheetMonth(row.month);
     const personId = String(row.person_id || "");
     const shift = String(row.shift || "");
     if (!month || !personId || !shift) return;
@@ -296,8 +296,8 @@ function readRestrictions() {
     id: String(row.id || ""),
     personId: String(row.person_id || ""),
     type: String(row.type || ""),
-    start: String(row.start || ""),
-    end: String(row.end || ""),
+    start: formatSheetDate(row.start),
+    end: formatSheetDate(row.end),
     note: String(row.note || ""),
   }));
 }
@@ -305,7 +305,7 @@ function readRestrictions() {
 function readHolidays() {
   return getRows(SHEETS.holidays).map((row) => ({
     id: String(row.id || ""),
-    date: String(row.date || ""),
+    date: formatSheetDate(row.date),
     name: String(row.name || ""),
   }));
 }
@@ -393,7 +393,7 @@ function getRows(name) {
 function readMeta() {
   const meta = {};
   getRows(SHEETS.meta).forEach((row) => {
-    if (row.key) meta[String(row.key)] = row.value;
+    if (row.key) meta[String(row.key)] = row.value instanceof Date ? row.value.toISOString() : row.value;
   });
   return meta;
 }
@@ -419,4 +419,34 @@ function appendHistory(entry) {
 
 function jsonResponse(data) {
   return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function formatSheetDate(value) {
+  if (!value) return "";
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  const text = String(value).trim();
+  const match = text.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match) return match[1];
+  const parsed = new Date(text);
+  if (!Number.isNaN(parsed.getTime())) {
+    return Utilities.formatDate(parsed, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  return text;
+}
+
+function formatSheetMonth(value) {
+  if (!value) return "";
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM");
+  }
+  const text = String(value).trim();
+  const match = text.match(/^(\d{4}-\d{2})/);
+  if (match) return match[1];
+  const parsed = new Date(text);
+  if (!Number.isNaN(parsed.getTime())) {
+    return Utilities.formatDate(parsed, Session.getScriptTimeZone(), "yyyy-MM");
+  }
+  return text;
 }

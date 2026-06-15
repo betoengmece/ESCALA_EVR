@@ -246,6 +246,26 @@ function undoLastChange() {
 }
 
 function normalizeLoadedState(value) {
+  const normalizeDateKey = (dateValue) => {
+    if (!dateValue) return "";
+    if (dateValue instanceof Date && !Number.isNaN(dateValue.getTime())) return dateKey(dateValue);
+    const text = String(dateValue).trim();
+    const isoMatch = text.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (isoMatch) return isoMatch[1];
+    const parsed = new Date(text);
+    if (!Number.isNaN(parsed.getTime())) return dateKey(parsed);
+    return text;
+  };
+  const normalizeMonthKeyValue = (monthValue) => {
+    if (!monthValue) return "";
+    if (monthValue instanceof Date && !Number.isNaN(monthValue.getTime())) return monthKey(monthValue);
+    const text = String(monthValue).trim();
+    const monthMatch = text.match(/^(\d{4}-\d{2})/);
+    if (monthMatch) return monthMatch[1];
+    const parsed = new Date(text);
+    if (!Number.isNaN(parsed.getTime())) return monthKey(parsed);
+    return text;
+  };
   const loaded = {
     people: Array.isArray(value?.people) ? value.people : [],
     assignments: value?.assignments && typeof value.assignments === "object" ? value.assignments : {},
@@ -255,10 +275,69 @@ function normalizeLoadedState(value) {
     holidays: Array.isArray(value?.holidays) ? value.holidays : [],
     legacyImports: Array.isArray(value?.legacyImports) ? value.legacyImports : [],
   };
+  loaded.assignments = Object.entries(loaded.assignments).reduce((normalized, [key, day]) => {
+    const normalizedKey = normalizeDateKey(key);
+    if (!normalizedKey) return normalized;
+    const normalizedDay = normalizeAssignments(day);
+    if (!normalized[normalizedKey]) normalized[normalizedKey] = normalizeAssignments({});
+    SHIFT_TYPES.forEach((shift) => {
+      normalized[normalizedKey][shift].push(...normalizedDay[shift]);
+    });
+    return normalized;
+  }, {});
   Object.keys(loaded.assignments).forEach((key) => {
     loaded.assignments[key] = normalizeAssignments(loaded.assignments[key]);
   });
+  loaded.fixedAssignments = Object.entries(loaded.fixedAssignments).reduce((normalized, [key, fixed]) => {
+    const [dateValue, shift, personId] = key.split("|");
+    const normalizedDate = normalizeDateKey(dateValue);
+    if (!normalizedDate || !shift || !personId) return normalized;
+    const valueObject = fixed && typeof fixed === "object" ? fixed : {};
+    normalized[`${normalizedDate}|${shift}|${personId}`] = {
+      originDate: normalizeDateKey(valueObject.originDate || normalizedDate),
+      originShift: valueObject.originShift || shift,
+    };
+    return normalized;
+  }, {});
+  loaded.monthlyShifts = Object.entries(loaded.monthlyShifts).reduce((normalized, [key, shifts]) => {
+    const normalizedKey = normalizeMonthKeyValue(key);
+    if (!normalizedKey) return normalized;
+    normalized[normalizedKey] = shifts && typeof shifts === "object" ? shifts : {};
+    return normalized;
+  }, {});
+  loaded.restrictions = loaded.restrictions.map((restriction) => ({
+    ...restriction,
+    start: normalizeDateKey(restriction.start),
+    end: normalizeDateKey(restriction.end),
+  }));
+  loaded.holidays = loaded.holidays.map((holiday) => ({
+    ...holiday,
+    date: normalizeDateKey(holiday.date),
+  }));
   return loaded;
+}
+
+function assertValidLoadedState(loaded) {
+  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+  const monthPattern = /^\d{4}-\d{2}$/;
+  Object.keys(loaded.assignments || {}).forEach((key) => {
+    if (!datePattern.test(key)) throw new Error(`Data inválida na escala: ${key}`);
+  });
+  Object.keys(loaded.fixedAssignments || {}).forEach((key) => {
+    const [dateValue] = key.split("|");
+    if (!datePattern.test(dateValue)) throw new Error(`Data inválida em card fixo: ${key}`);
+  });
+  Object.keys(loaded.monthlyShifts || {}).forEach((key) => {
+    if (!monthPattern.test(key)) throw new Error(`Mês inválido em regimes mensais: ${key}`);
+  });
+  (loaded.restrictions || []).forEach((restriction) => {
+    if (!datePattern.test(restriction.start) || !datePattern.test(restriction.end)) {
+      throw new Error(`Data inválida em restrição: ${restriction.start || "sem início"} até ${restriction.end || "sem fim"}`);
+    }
+  });
+  (loaded.holidays || []).forEach((holiday) => {
+    if (!datePattern.test(holiday.date)) throw new Error(`Data inválida em feriado: ${holiday.date || "sem data"}`);
+  });
 }
 
 function normalizeLegacyText(value) {
@@ -2263,6 +2342,8 @@ async function readCloudJson(response) {
 }
 
 async function pullFromCloud() {
+  const previousState = structuredClone(state);
+  const previousSyncMeta = { ...syncMeta };
   try {
     setSyncBusy(true);
     updateSyncStatus("Nuvem: baixando...", "busy");
@@ -2277,22 +2358,31 @@ async function pullFromCloud() {
       return;
     }
     const previousRawState = localStorage.getItem(STORAGE_KEY);
-    if (previousRawState) pushUndoSnapshot(previousRawState);
-    state = normalizeLoadedState(data.state);
+    const restoredState = normalizeLoadedState(data.state);
+    assertValidLoadedState(restoredState);
+    state = restoredState;
     syncMeta = {
       version: Number(data.version || 0),
       updatedAt: data.updatedAt || null,
       lastSyncedAt: new Date().toISOString(),
       dirty: false,
     };
+    renderAll();
+    if (previousRawState) pushUndoSnapshot(previousRawState);
     persistUndoStack();
     saveState({ skipUndo: true, skipSyncDirty: true });
     persistSyncMeta();
-    renderAll();
     alert("Escala baixada da nuvem com sucesso.");
   } catch (error) {
+    state = previousState;
+    syncMeta = previousSyncMeta;
+    try {
+      renderAll();
+    } catch (renderError) {
+      updateSyncStatus();
+    }
     updateSyncStatus("Nuvem: erro ao baixar", "error");
-    alert(`Não consegui baixar da nuvem. ${error.message || error}`);
+    alert(`Não consegui baixar da nuvem. Seus dados locais foram preservados. ${error.message || error}`);
   } finally {
     setSyncBusy(false);
   }
