@@ -51,7 +51,7 @@ let draggedSourceDate = null;
 let draggedSourceShift = null;
 let reviewMode = true;
 let editingRestrictionId = null;
-let restrictionFilterValue = "all";
+let restrictionFilterValue = "active";
 
 const els = {
   tabs: document.querySelectorAll(".tab-button"),
@@ -2764,6 +2764,7 @@ function renderRestrictionFilter() {
     .join("");
 
   els.restrictionFilter.innerHTML = `
+    <option value="active" ${currentValue === "active" ? "selected" : ""}>Ativas e futuras</option>
     <option value="all" ${currentValue === "all" ? "selected" : ""}>Tudo</option>
     <option value="current" ${currentValue === "current" ? "selected" : ""}>Mês selecionado (${monthLabel(currentMonth)})</option>
     ${monthOptions}
@@ -2771,6 +2772,7 @@ function renderRestrictionFilter() {
 }
 
 function restrictionMatchesFilter(restriction) {
+  if (restrictionFilterValue === "active") return restriction.end >= dateKey(new Date());
   if (restrictionFilterValue === "all") return true;
   const filterMonth = restrictionFilterValue === "current" ? monthKey() : restrictionFilterValue;
   const start = `${filterMonth}-01`;
@@ -2871,7 +2873,7 @@ function renderRestrictions() {
 
   if (!filteredRestrictions.length) {
     els.restrictionList.innerHTML = state.restrictions.length
-      ? '<div class="empty-state">Nenhuma restrição neste filtro.</div>'
+      ? '<div class="empty-state">Nenhuma restrição ativa ou futura neste filtro. Para ver histórico, altere o filtro para Tudo ou escolha um mês anterior.</div>'
       : '<div class="empty-state">Nenhuma restrição cadastrada.</div>';
   }
 
