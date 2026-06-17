@@ -2226,25 +2226,99 @@ function escapeCsvCell(value) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
+function uniqueAssignedPeople(personIds) {
+  const seen = new Set();
+  return personIds.filter((personId) => {
+    if (!personId || isEmptySlot(personId) || seen.has(personId)) return false;
+    seen.add(personId);
+    return true;
+  });
+}
+
+function buildStableCsvShiftPlan(monthKeys, shift, headerPrefix, minimumColumns = 0) {
+  const firstSeen = new Map();
+  const positionCounts = new Map();
+  const occurrenceCounts = new Map();
+  const conflicts = new Map();
+
+  const ensurePerson = (personId, order) => {
+    if (!firstSeen.has(personId)) firstSeen.set(personId, order);
+    if (!positionCounts.has(personId)) positionCounts.set(personId, new Map());
+    if (!conflicts.has(personId)) conflicts.set(personId, new Set());
+  };
+
+  monthKeys.forEach((key, dayIndex) => {
+    const personIds = uniqueAssignedPeople(getAssignments(key)[shift]);
+    personIds.forEach((personId, position) => {
+      ensurePerson(personId, dayIndex * 100 + position);
+      occurrenceCounts.set(personId, (occurrenceCounts.get(personId) || 0) + 1);
+      const counts = positionCounts.get(personId);
+      counts.set(position, (counts.get(position) || 0) + 1);
+    });
+    personIds.forEach((personId, index) => {
+      personIds.slice(index + 1).forEach((otherId) => {
+        conflicts.get(personId).add(otherId);
+        conflicts.get(otherId).add(personId);
+      });
+    });
+  });
+
+  const peopleOrder = new Map(state.people.map((person, index) => [person.id, index]));
+  const personIds = [...positionCounts.keys()].sort((a, b) => {
+    const degreeDiff = (conflicts.get(b)?.size || 0) - (conflicts.get(a)?.size || 0);
+    if (degreeDiff) return degreeDiff;
+    const countDiff = (occurrenceCounts.get(b) || 0) - (occurrenceCounts.get(a) || 0);
+    if (countDiff) return countDiff;
+    const rosterDiff = (peopleOrder.get(a) ?? 9999) - (peopleOrder.get(b) ?? 9999);
+    if (rosterDiff) return rosterDiff;
+    return (firstSeen.get(a) || 0) - (firstSeen.get(b) || 0);
+  });
+
+  const columnByPerson = new Map();
+  personIds.forEach((personId) => {
+    const unavailable = new Set(
+      [...(conflicts.get(personId) || [])]
+        .map((otherId) => columnByPerson.get(otherId))
+        .filter((column) => column !== undefined),
+    );
+    const preferredColumns = [...positionCounts.get(personId).entries()]
+      .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+      .map(([position]) => position);
+    let column = preferredColumns.find((position) => !unavailable.has(position));
+    if (column === undefined) {
+      column = 0;
+      while (unavailable.has(column)) column += 1;
+    }
+    columnByPerson.set(personId, column);
+  });
+
+  const assignedColumns = [...columnByPerson.values()];
+  const columnCount = Math.max(minimumColumns, assignedColumns.length ? Math.max(...assignedColumns) + 1 : 0);
+  return {
+    headers: Array.from({ length: columnCount }, (_, index) => `${headerPrefix} ${index + 1}`),
+    cellsFor(key) {
+      const cells = Array.from({ length: columnCount }, () => "");
+      uniqueAssignedPeople(getAssignments(key)[shift]).forEach((personId) => {
+        const column = columnByPerson.get(personId);
+        if (column !== undefined && column < cells.length) cells[column] = csvPersonName(personId);
+      });
+      return cells;
+    },
+  };
+}
+
 function exportMonthCsv() {
   const selectedMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
   const monthKeys = Array.from({ length: daysInMonth(selectedMonth) }, (_, index) => {
     const day = new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), index + 1);
     return dateKey(day);
   });
-  const maxCommercial = monthKeys.reduce((max, key) => {
-    return Math.max(max, getAssignments(key).Comercial.length);
-  }, 0);
-  const headers = ["24h 1", "24h 2", "12x36", ...Array.from({ length: maxCommercial }, (_, index) => `Comercial ${index + 1}`)];
+  const plan24 = buildStableCsvShiftPlan(monthKeys, "24x72", "24h", 2);
+  const plan12 = buildStableCsvShiftPlan(monthKeys, "12x36", "12x36", 1);
+  const planCommercial = buildStableCsvShiftPlan(monthKeys, "Comercial", "Comercial", 0);
+  const headers = [...plan24.headers, ...plan12.headers, ...planCommercial.headers];
   const rows = monthKeys.map((key) => {
-    const day = getAssignments(key);
-    const commercialNames = Array.from({ length: maxCommercial }, (_, index) => csvPersonName(day.Comercial[index]));
-    return [
-      csvPersonName(day["24x72"][0]),
-      csvPersonName(day["24x72"][1]),
-      day["12x36"].map(csvPersonName).filter(Boolean).join(" / "),
-      ...commercialNames,
-    ];
+    return [...plan24.cellsFor(key), ...plan12.cellsFor(key), ...planCommercial.cellsFor(key)];
   });
 
   const csv = [headers, ...rows].map((row) => row.map(escapeCsvCell).join(";")).join("\r\n");
