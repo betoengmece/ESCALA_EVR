@@ -89,6 +89,7 @@ const els = {
   restrictionEnd: document.getElementById("restriction-end"),
   restrictionNote: document.getElementById("restriction-note"),
   restrictionFilter: document.getElementById("restriction-filter"),
+  vacationCheck: document.getElementById("vacation-check"),
   restrictionList: document.getElementById("restriction-list"),
   holidayForm: document.getElementById("holiday-form"),
   holidayDate: document.getElementById("holiday-date"),
@@ -2854,6 +2855,47 @@ function restrictionMatchesFilter(restriction) {
   return restriction.start <= end && restriction.end >= start;
 }
 
+function hasVacationInYear(personId, year) {
+  const start = `${year}-01-01`;
+  const end = `${year}-12-31`;
+  return state.restrictions.some((restriction) => {
+    return restriction.personId === personId && normalizeLegacyText(restriction.type) === "FERIAS" && restriction.start <= end && restriction.end >= start;
+  });
+}
+
+function renderVacationCheck() {
+  if (!els.vacationCheck) return;
+  const year = currentDate.getFullYear();
+  const people = state.people.slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  if (!people.length) {
+    els.vacationCheck.innerHTML = "";
+    return;
+  }
+
+  const missing = people.filter((person) => !hasVacationInYear(person.id, year));
+  if (!missing.length) {
+    els.vacationCheck.className = "vacation-check is-complete";
+    els.vacationCheck.innerHTML = `
+      <div>
+        <strong>Férias ${year}</strong>
+        <span>Toda a equipe tem férias cadastrada neste ano.</span>
+      </div>
+    `;
+    return;
+  }
+
+  els.vacationCheck.className = "vacation-check has-missing";
+  els.vacationCheck.innerHTML = `
+    <div>
+      <strong>Férias ${year}</strong>
+      <span>${missing.length} pessoa(s) ainda sem férias cadastrada neste ano.</span>
+    </div>
+    <div class="vacation-missing-list">
+      ${missing.map((person) => `<span>${person.name}</span>`).join("")}
+    </div>
+  `;
+}
+
 function renderRestrictionEditItem(restriction, person) {
   return `
     <div class="restriction-edit-grid">
@@ -2931,6 +2973,7 @@ function updateRestrictionFromEditItem(id) {
 
 function renderRestrictions() {
   renderRestrictionFilter();
+  renderVacationCheck();
   els.restrictionList.innerHTML = "";
   const filteredRestrictions = state.restrictions
     .slice()

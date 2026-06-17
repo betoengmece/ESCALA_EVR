@@ -625,6 +625,54 @@ button {
   padding: 0 8px;
 }
 
+.vacation-check {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.vacation-check strong {
+  display: block;
+  font-size: 14px;
+}
+
+.vacation-check span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.vacation-check.is-complete {
+  border-color: rgba(42, 148, 92, 0.22);
+  background: rgba(42, 148, 92, 0.08);
+}
+
+.vacation-check.has-missing {
+  border-color: rgba(190, 127, 33, 0.28);
+  background: rgba(190, 127, 33, 0.08);
+}
+
+.vacation-missing-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.vacation-missing-list span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid rgba(190, 127, 33, 0.22);
+  color: var(--text);
+  font-weight: 800;
+}
+
 .form-grid.compact {
   grid-template-columns: minmax(220px, 1fr) 220px 180px;
 }
