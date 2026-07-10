@@ -2399,6 +2399,11 @@ function buildStableCsvShiftPlan(monthKeys, shift, headerPrefix, minimumColumns 
 
 function exportMonthCsv() {
   const selectedMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+  const selectedMonthLabel = selectedMonth.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+  const shouldExport = confirm(
+    `Antes de exportar a escala de ${selectedMonthLabel}, confira as férias do mês no SA3.\n\nDeseja continuar com a exportação?`,
+  );
+  if (!shouldExport) return;
   const monthKeys = Array.from({ length: daysInMonth(selectedMonth) }, (_, index) => {
     const day = new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), index + 1);
     return dateKey(day);
