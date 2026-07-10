@@ -64,7 +64,8 @@ const els = {
   availableList: document.getElementById("available-list"),
   availableCount: document.getElementById("available-count"),
   autoFill: document.getElementById("auto-fill"),
-  optimizeComplete: document.getElementById("optimize-complete"),
+  validateSchedule: document.getElementById("validate-schedule"),
+  completeSchedule: document.getElementById("complete-schedule"),
   undoAction: document.getElementById("undo-action"),
   exportData: document.getElementById("export-data"),
   exportCsv: document.getElementById("export-csv"),
@@ -1358,6 +1359,94 @@ function autoFillOptimized() {
   ensureEveryAvailablePersonWorks(monthKeys);
   saveState();
   renderAll();
+}
+
+function firstAvailableKeyNextMonth(person) {
+  const nextMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
+  const nextMonthKeys = Array.from({ length: daysInMonth(nextMonth) }, (_, index) => {
+    const day = new Date(nextMonth.getFullYear(), nextMonth.getMonth(), index + 1);
+    return dateKey(day);
+  });
+  const personShift = getPersonShift(person, monthKey(nextMonth));
+  return nextMonthKeys.find((key) => {
+    if (isRestricted(person.id, key)) return false;
+    return !isCommercialRegime(personShift) || isBusinessWorkday(key);
+  }) || null;
+}
+
+function validateCurrentSchedule() {
+  const monthKeys = getMonthKeys();
+  const afterMonthKey = addDaysKey(monthKeys[monthKeys.length - 1], 1);
+  const positiveIndexes = state.people
+    .map((person) => ({ person, index: calculateCumulativeBalanceToDate(person.id, afterMonthKey) }))
+    .filter(({ index }) => index >= 1)
+    .sort((a, b) => b.index - a.index || a.person.name.localeCompare(b.person.name));
+
+  const missingPeople = state.people
+    .filter((person) => monthKeys.some((key) => !isRestricted(person.id, key)))
+    .filter((person) => countMonthTotalAssignments(person.id, monthKeys) === 0)
+    .map((person) => {
+      const nextKey = firstAvailableKeyNextMonth(person);
+      const projectedIndex = nextKey === null
+        ? null
+        : calculateCumulativeBalanceToDate(person.id, nextKey) + restBalanceForAssignment(person.id, nextKey);
+      return { person, projectedIndex };
+    })
+    .sort((a, b) => a.person.name.localeCompare(b.person.name));
+
+  const sections = [];
+  if (positiveIndexes.length) {
+    sections.push(`Índice +1 ou superior:\n${positiveIndexes.map(({ person, index }) => `• ${person.name}: ${restBalanceLabel(index)}`).join("\n")}`);
+  } else {
+    sections.push("Índice +1 ou superior: ninguém.");
+  }
+  if (missingPeople.length) {
+    sections.push(`Possíveis esquecimentos (sem nenhuma escala no mês):\n${missingPeople.map(({ person, projectedIndex }) => {
+      const projection = projectedIndex === null ? "sem dia disponível no próximo mês" : `projeção no próximo mês: ${restBalanceLabel(projectedIndex)}`;
+      return `• ${person.name} (${projection})`;
+    }).join("\n")}`);
+  } else {
+    sections.push("Possíveis esquecimentos: ninguém ficou sem escala no mês.");
+  }
+  alert(sections.join("\n\n"));
+}
+
+function completeCurrentSchedule() {
+  const monthKeys = getMonthKeys();
+  const before = JSON.stringify(monthKeys.map((key) => getAssignments(key)));
+  const cycle = getHistorical24PairCycle(monthKeys);
+  let cursor = cycle.startIndex || 0;
+
+  monthKeys.forEach((key) => {
+    const day = getAssignments(key);
+    const preferredPair = cycle.pairs[cursor] || [];
+    const candidates = [
+      ...preferredPair.map((personId) => findPerson(personId)).filter(Boolean),
+      ...state.people
+        .filter((person) => canUsePersonOnDay(person.id, key, "24x72"))
+        .map((person) => restIndexCandidateScore(person, key, "24x72", monthKeys))
+        .sort(compareRestIndexCandidates)
+        .map(({ person }) => person),
+    ];
+
+    while (day["24x72"].length < 2 || day["24x72"].some((personId) => isEmptySlot(personId))) {
+      const slotIndex = day["24x72"].findIndex((personId) => isEmptySlot(personId));
+      const targetIndex = slotIndex >= 0 ? slotIndex : day["24x72"].length;
+      const person = candidates.find((candidate) => canUsePersonOnDay(candidate.id, key, "24x72"));
+      if (!person) break;
+      day["24x72"][targetIndex] = person.id;
+    }
+    if (cycle.pairs.length) cursor = (cursor + 1) % cycle.pairs.length;
+  });
+
+  const after = JSON.stringify(monthKeys.map((key) => getAssignments(key)));
+  if (after === before) {
+    alert("Não havia vagas que pudessem ser completadas sem alterar a escala atual.");
+    return;
+  }
+  saveState();
+  renderAll();
+  alert("Vagas completadas sem alterar nenhuma pessoa que já estava na escala.");
 }
 
 function calculateMonthBalance(personId, monthKeys) {
@@ -3053,9 +3142,8 @@ els.monthPicker.addEventListener("change", (event) => {
 });
 
 els.autoFill.addEventListener("click", autoFill24x72);
-document.getElementById("optimize-balance").addEventListener("click", autoFillOptimized);
-els.optimizeComplete.addEventListener("click", autoFillCompleteCoverage);
-document.getElementById("refine-balance").addEventListener("click", refineScheduleWithLocalSearch);
+els.validateSchedule.addEventListener("click", validateCurrentSchedule);
+els.completeSchedule.addEventListener("click", completeCurrentSchedule);
 els.undoAction?.addEventListener("click", undoLastChange);
 els.checkScale.addEventListener("click", () => {
   reviewMode = !reviewMode;
