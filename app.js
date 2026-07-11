@@ -2658,8 +2658,8 @@ function calculateStats() {
         restDays: 0,
         restBalance: 0,
         restAlerts: 0,
-        earlyReturns: 0,
-        lateReturns: 0,
+        missingRestDays: 0,
+        extraRestDays: 0,
         restrictions: 0,
       },
       accumulated: {
@@ -2674,8 +2674,8 @@ function calculateStats() {
         restDays: 0,
         restBalance: 0,
         restAlerts: 0,
-        earlyReturns: 0,
-        lateReturns: 0,
+        missingRestDays: 0,
+        extraRestDays: 0,
         restrictions: 0,
       },
     };
@@ -2729,18 +2729,18 @@ function calculateStats() {
             stats.accumulated.restAlerts += 1;
           }
           if (balance > 0) {
-            stats.accumulated.earlyReturns += 1;
+            stats.accumulated.missingRestDays += balance;
           }
-          if (balance < 0) stats.accumulated.lateReturns += 1;
+          if (balance < 0) stats.accumulated.extraRestDays += Math.abs(balance);
           if (inCurrentMonth) {
             stats.month.restBalance = balance;
             if (balance !== 0) {
               stats.month.restAlerts += 1;
             }
             if (balance > 0) {
-              stats.month.earlyReturns += 1;
+              stats.month.missingRestDays += balance;
             }
-            if (balance < 0) stats.month.lateReturns += 1;
+            if (balance < 0) stats.month.extraRestDays += Math.abs(balance);
           }
         }
       });
@@ -2789,7 +2789,7 @@ function renderStatsRanking(statsList) {
       <div class="ranking-head">
         <div>
           <h3>Comparativo da equipe</h3>
-          <p>“Folgas a menos” e “Folgas a mais” mostram quantas vezes a pessoa retornou antes ou depois do intervalo previsto. Os índices de dias não são somados.</p>
+          <p>“Folgas a menos” soma os índices positivos; “Folgas a mais” soma, em dias, os índices negativos. As duas compensações são apresentadas separadamente.</p>
         </div>
       </div>
     </article>
@@ -2809,8 +2809,8 @@ function statsComparisonTable(statsList, group, title) {
           <td>${values.shifts12}</td>
           <td>${values.shiftsBusiness}</td>
           <td><strong>${values.workedHours}h</strong></td>
-          <td class="owes-rest">${values.earlyReturns}</td>
-          <td class="extra-rest">${values.lateReturns}</td>
+          <td class="owes-rest">${values.missingRestDays}d</td>
+          <td class="extra-rest">${values.extraRestDays}d</td>
           <td>${values.restrictions}</td>
         </tr>`;
     }).join("");
@@ -2819,7 +2819,7 @@ function statsComparisonTable(statsList, group, title) {
       <h3>${title}</h3>
       <div class="stats-table-wrap">
         <table class="stats-comparison-table">
-          <thead><tr><th>Pessoa</th><th>24x72</th><th>12x36</th><th>Comercial</th><th>Horas</th><th title="Quantidade de vezes em que houve menos folga que o previsto">Folgas a menos</th><th title="Quantidade de vezes em que houve mais folga que o previsto">Folgas a mais</th><th>Restrição</th></tr></thead>
+          <thead><tr><th>Pessoa</th><th>24x72</th><th>12x36</th><th>Comercial</th><th>Horas</th><th title="Soma dos dias de folga que faltaram">Folgas a menos</th><th title="Soma dos dias de folga concedidos além do previsto">Folgas a mais</th><th>Restrição</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
