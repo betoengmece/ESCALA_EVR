@@ -21,6 +21,7 @@ const PERSON_SHIFT_TYPES = ["24x72", "12x36", "Comercial", "Comercial Fixo"];
 const RESTRICTION_TYPES = ["Férias", "Curso", "Atestado", "Outro impedimento"];
 const EMPTY_SLOT_ID = "vazio";
 const LEGACY_CSV_IMPORT_KEY = "csv-escala-2025-08-v1";
+const REPORT_START_KEY = "2026-04-01";
 
 const defaultState = {
   people: [
@@ -2682,10 +2683,10 @@ function calculateStats() {
 
     const monthKeys = getMonthKeys();
     const lastDayOfMonth = monthKeys[monthKeys.length - 1];
-    const accumulatedKeys = keysBetween(getTimelineStartKey(), lastDayOfMonth);
+    const accumulatedKeys = lastDayOfMonth >= REPORT_START_KEY ? keysBetween(REPORT_START_KEY, lastDayOfMonth) : [];
 
     Object.keys(state.assignments)
-      .filter((k) => k <= lastDayOfMonth)
+      .filter((k) => k >= REPORT_START_KEY && k <= lastDayOfMonth)
       .sort((a, b) => a.localeCompare(b))
       .forEach((k) => {
         const day = getAssignments(k);
@@ -2746,6 +2747,7 @@ function calculateStats() {
       });
 
     monthKeys.forEach((key) => {
+      if (key < REPORT_START_KEY) return;
       if (isRestricted(person.id, key)) stats.month.restrictions += 1;
       stats.month.restHours += restHoursForPersonOnDay(person.id, key);
     });
@@ -2756,7 +2758,9 @@ function calculateStats() {
 
     state.restrictions.forEach((restriction) => {
       if (restriction.personId !== person.id) return;
-      const start = restriction.start <= lastDayOfMonth ? restriction.start : null;
+      const start = restriction.start <= lastDayOfMonth
+        ? (restriction.start < REPORT_START_KEY ? REPORT_START_KEY : restriction.start)
+        : null;
       if (!start) return;
       const end = restriction.end < lastDayOfMonth ? restriction.end : lastDayOfMonth;
       if (end < start) return;
@@ -2789,6 +2793,7 @@ function renderStatsRanking(statsList) {
       <div class="ranking-head">
         <div>
           <h3>Comparativo da equipe</h3>
+          <p><strong>Dados contabilizados a partir de abril de 2026.</strong></p>
           <p>“Folgas a menos” soma os índices positivos; “Folgas a mais” soma, em dias, os índices negativos. As duas compensações são apresentadas separadamente.</p>
         </div>
       </div>
