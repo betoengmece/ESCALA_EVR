@@ -1376,11 +1376,13 @@ function firstAvailableKeyNextMonth(person) {
 
 function validateCurrentSchedule() {
   const monthKeys = getMonthKeys();
-  const afterMonthKey = addDaysKey(monthKeys[monthKeys.length - 1], 1);
-  const positiveIndexes = state.people
-    .map((person) => ({ person, index: calculateCumulativeBalanceToDate(person.id, afterMonthKey) }))
-    .filter(({ index }) => index >= 1)
-    .sort((a, b) => b.index - a.index || a.person.name.localeCompare(b.person.name));
+  const positiveIndexes = monthKeys.flatMap((key) => {
+    const day = getAssignments(key);
+    return SHIFT_TYPES.flatMap((shift) => day[shift]
+      .filter((personId) => !isEmptySlot(personId))
+      .map((personId) => ({ person: findPerson(personId), key, index: restBalanceForAssignment(personId, key) })))
+      .filter(({ person, index }) => person && index >= 1);
+  }).sort((a, b) => b.index - a.index || a.key.localeCompare(b.key) || a.person.name.localeCompare(b.person.name));
 
   const missingPeople = state.people
     .filter((person) => monthKeys.some((key) => !isRestricted(person.id, key)))
@@ -1396,7 +1398,7 @@ function validateCurrentSchedule() {
 
   const sections = [];
   if (positiveIndexes.length) {
-    sections.push(`Índice +1 ou superior:\n${positiveIndexes.map(({ person, index }) => `• ${person.name}: ${restBalanceLabel(index)}`).join("\n")}`);
+    sections.push(`Índice +1 ou superior:\n${positiveIndexes.map(({ person, key, index }) => `• ${person.name}: ${restBalanceLabel(index)} em ${formatDate(key)}`).join("\n")}`);
   } else {
     sections.push("Índice +1 ou superior: ninguém.");
   }
