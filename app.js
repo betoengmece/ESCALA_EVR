@@ -84,7 +84,7 @@ const els = {
   personShift: document.getElementById("person-shift"),
   peopleList: document.getElementById("people-list"),
   restrictionForm: document.getElementById("restriction-form"),
-  restrictionPerson: document.getElementById("restriction-person"),
+  restrictionPeople: document.getElementById("restriction-people"),
   restrictionType: document.getElementById("restriction-type"),
   restrictionStart: document.getElementById("restriction-start"),
   restrictionEnd: document.getElementById("restriction-end"),
@@ -2860,14 +2860,14 @@ function renderStats() {
 
 function renderPeople() {
   els.peopleList.innerHTML = "";
-  els.restrictionPerson.innerHTML = "";
+  els.restrictionPeople.innerHTML = "";
 
   state.people.forEach((person) => {
     const selectedShift = getPersonShift(person);
-    const option = document.createElement("option");
-    option.value = person.id;
-    option.textContent = person.name;
-    els.restrictionPerson.appendChild(option);
+    const checkboxLabel = document.createElement("label");
+    checkboxLabel.className = "restriction-person-option";
+    checkboxLabel.innerHTML = `<input type="checkbox" name="restriction-person" value="${person.id}" /> <span>${person.name}</span>`;
+    els.restrictionPeople.appendChild(checkboxLabel);
 
     const row = document.createElement("article");
     row.className = "person-row";
@@ -2886,7 +2886,26 @@ function renderPeople() {
 
   if (!state.people.length) {
     els.peopleList.innerHTML = '<div class="empty-state">Cadastre a primeira pessoa da equipe.</div>';
+    els.restrictionPeople.innerHTML = '<span class="empty-state">Cadastre pessoas na aba Equipe.</span>';
   }
+}
+
+function overlappingRestrictions(personIds, start, end, ignoredRestrictionId = null) {
+  const selectedIds = new Set(personIds);
+  return state.restrictions.filter((restriction) => {
+    if (restriction.id === ignoredRestrictionId || !selectedIds.has(restriction.personId)) return false;
+    return restriction.start <= end && restriction.end >= start;
+  });
+}
+
+function alertRestrictionOverlaps(conflicts) {
+  const lines = conflicts
+    .map((restriction) => {
+      const person = findPerson(restriction.personId);
+      return `• ${person?.name || "Pessoa removida"}: ${restriction.type}, ${formatDate(restriction.start)} até ${formatDate(restriction.end)}`;
+    })
+    .join("\n");
+  alert(`Não foi possível salvar. Já existe restrição no mesmo período para:\n\n${lines}\n\nAltere o período ou desmarque essas pessoas.`);
 }
 
 function restrictionTypeOptions(selectedType) {
@@ -3050,7 +3069,13 @@ function updateRestrictionFromEditItem(id) {
 
   const restriction = state.restrictions.find((entry) => entry.id === id);
   if (!restriction) return;
-  restriction.personId = valueFor("personId");
+  const personId = valueFor("personId");
+  const conflicts = overlappingRestrictions([personId], start, end, id);
+  if (conflicts.length) {
+    alertRestrictionOverlaps(conflicts);
+    return;
+  }
+  restriction.personId = personId;
   restriction.type = valueFor("type");
   restriction.start = start;
   restriction.end = end;
@@ -3205,18 +3230,34 @@ els.restrictionForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const start = els.restrictionStart.value;
   const end = els.restrictionEnd.value;
-  if (end < start) return;
-  state.restrictions.push({
-    id: crypto.randomUUID(),
-    personId: els.restrictionPerson.value,
-    type: els.restrictionType.value,
-    start,
-    end,
-    note: els.restrictionNote.value.trim(),
+  if (!start || !end || end < start) {
+    alert("Verifique as datas da restrição.");
+    return;
+  }
+  const personIds = [...els.restrictionPeople.querySelectorAll('input[name="restriction-person"]:checked')]
+    .map((input) => input.value);
+  if (!personIds.length) {
+    alert("Marque pelo menos uma pessoa.");
+    return;
+  }
+  const conflicts = overlappingRestrictions(personIds, start, end);
+  if (conflicts.length) {
+    alertRestrictionOverlaps(conflicts);
+    return;
+  }
+  personIds.forEach((personId) => {
+    state.restrictions.push({
+      id: crypto.randomUUID(),
+      personId,
+      type: els.restrictionType.value,
+      start,
+      end,
+      note: els.restrictionNote.value.trim(),
+    });
   });
   Object.keys(state.assignments).forEach((key) => {
     if (key >= start && key <= end) {
-      removePersonFromDay(els.restrictionPerson.value, key);
+      personIds.forEach((personId) => removePersonFromDay(personId, key));
     }
   });
   els.restrictionForm.reset();

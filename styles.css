@@ -585,6 +585,54 @@ button {
   margin-bottom: 18px;
 }
 
+.restriction-people-field {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.restriction-people-field legend {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.restriction-people-checklist {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 7px;
+  max-height: 150px;
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.restriction-person-option {
+  display: flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: 7px !important;
+  min-height: 30px;
+  padding: 4px 7px;
+  border-radius: 6px;
+  color: var(--text) !important;
+  cursor: pointer;
+}
+
+.restriction-person-option:hover {
+  background: #eef5f8;
+}
+
+.restriction-person-option input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
 .holiday-form {
   margin-top: 18px;
 }
