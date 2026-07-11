@@ -2660,7 +2660,6 @@ function calculateStats() {
         restAlerts: 0,
         earlyReturns: 0,
         lateReturns: 0,
-        highestEarlyIndex: 0,
         restrictions: 0,
       },
       accumulated: {
@@ -2677,7 +2676,6 @@ function calculateStats() {
         restAlerts: 0,
         earlyReturns: 0,
         lateReturns: 0,
-        highestEarlyIndex: 0,
         restrictions: 0,
       },
     };
@@ -2732,7 +2730,6 @@ function calculateStats() {
           }
           if (balance > 0) {
             stats.accumulated.earlyReturns += 1;
-            stats.accumulated.highestEarlyIndex = Math.max(stats.accumulated.highestEarlyIndex, balance);
           }
           if (balance < 0) stats.accumulated.lateReturns += 1;
           if (inCurrentMonth) {
@@ -2742,7 +2739,6 @@ function calculateStats() {
             }
             if (balance > 0) {
               stats.month.earlyReturns += 1;
-              stats.month.highestEarlyIndex = Math.max(stats.month.highestEarlyIndex, balance);
             }
             if (balance < 0) stats.month.lateReturns += 1;
           }
@@ -2793,7 +2789,7 @@ function renderStatsRanking(statsList) {
       <div class="ranking-head">
         <div>
           <h3>Comparativo da equipe</h3>
-          <p>Os índices não são somados: cada + ou - pertence ao intervalo entre dois trabalhos. “Maior +” mostra o retorno mais antecipado do período.</p>
+          <p>“Folgas a menos” e “Folgas a mais” mostram quantas vezes a pessoa retornou antes ou depois do intervalo previsto. Os índices de dias não são somados.</p>
         </div>
       </div>
     </article>
@@ -2814,7 +2810,6 @@ function statsComparisonTable(statsList, group, title) {
           <td>${values.shiftsBusiness}</td>
           <td><strong>${values.workedHours}h</strong></td>
           <td class="owes-rest">${values.earlyReturns}</td>
-          <td class="owes-rest">${values.highestEarlyIndex ? `+${values.highestEarlyIndex}` : "—"}</td>
           <td class="extra-rest">${values.lateReturns}</td>
           <td>${values.restrictions}</td>
         </tr>`;
@@ -2824,7 +2819,7 @@ function statsComparisonTable(statsList, group, title) {
       <h3>${title}</h3>
       <div class="stats-table-wrap">
         <table class="stats-comparison-table">
-          <thead><tr><th>Pessoa</th><th>24x72</th><th>12x36</th><th>Comercial</th><th>Horas</th><th title="Quantidade de retornos antes da folga prevista">Retornos +</th><th>Maior +</th><th title="Quantidade de retornos depois da folga prevista">Retornos -</th><th>Restrição</th></tr></thead>
+          <thead><tr><th>Pessoa</th><th>24x72</th><th>12x36</th><th>Comercial</th><th>Horas</th><th title="Quantidade de vezes em que houve menos folga que o previsto">Folgas a menos</th><th title="Quantidade de vezes em que houve mais folga que o previsto">Folgas a mais</th><th>Restrição</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
