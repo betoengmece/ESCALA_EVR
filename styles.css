@@ -780,6 +780,77 @@ button {
   margin-bottom: 12px;
 }
 
+.stats-comparison-card {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.stats-comparison-card h3 {
+  margin: 0;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 16px;
+  text-transform: capitalize;
+}
+
+.stats-table-wrap {
+  overflow-x: auto;
+}
+
+.stats-comparison-table {
+  width: 100%;
+  min-width: 820px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.stats-comparison-table th,
+.stats-comparison-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.stats-comparison-table thead th {
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.stats-comparison-table th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 160px;
+  background: var(--surface);
+  text-align: left;
+}
+
+.stats-comparison-table thead th:first-child {
+  background: var(--surface-2);
+}
+
+.stats-comparison-table tbody tr:hover {
+  background: #f5f9fb;
+}
+
+.stats-comparison-table tbody tr:last-child th,
+.stats-comparison-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.stats-comparison-table th small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
 .ranking-card,
 .stat-card,
 .restriction-item,

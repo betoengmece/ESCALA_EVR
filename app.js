@@ -2658,6 +2658,9 @@ function calculateStats() {
         restDays: 0,
         restBalance: 0,
         restAlerts: 0,
+        earlyReturns: 0,
+        lateReturns: 0,
+        highestEarlyIndex: 0,
         restrictions: 0,
       },
       accumulated: {
@@ -2672,6 +2675,9 @@ function calculateStats() {
         restDays: 0,
         restBalance: 0,
         restAlerts: 0,
+        earlyReturns: 0,
+        lateReturns: 0,
+        highestEarlyIndex: 0,
         restrictions: 0,
       },
     };
@@ -2720,15 +2726,25 @@ function calculateStats() {
 
         if (SHIFT_TYPES.some((shift) => day[shift].includes(person.id))) {
           const balance = restBalanceForAssignment(person.id, k);
-          stats.accumulated.restBalance += balance;
+          stats.accumulated.restBalance = balance;
           if (balance !== 0) {
             stats.accumulated.restAlerts += 1;
           }
+          if (balance > 0) {
+            stats.accumulated.earlyReturns += 1;
+            stats.accumulated.highestEarlyIndex = Math.max(stats.accumulated.highestEarlyIndex, balance);
+          }
+          if (balance < 0) stats.accumulated.lateReturns += 1;
           if (inCurrentMonth) {
-            stats.month.restBalance += balance;
+            stats.month.restBalance = balance;
             if (balance !== 0) {
               stats.month.restAlerts += 1;
             }
+            if (balance > 0) {
+              stats.month.earlyReturns += 1;
+              stats.month.highestEarlyIndex = Math.max(stats.month.highestEarlyIndex, balance);
+            }
+            if (balance < 0) stats.month.lateReturns += 1;
           }
         }
       });
@@ -2772,90 +2788,57 @@ function formatRatio(value) {
 }
 
 function renderStatsRanking(statsList) {
-  const ranking = statsList
-    .map((stats) => {
-      const otherHours = stats.accumulated.hours12 + stats.accumulated.hoursBusiness;
-      return {
-        person: stats.person,
-        hours24: stats.accumulated.hours24,
-        otherHours,
-        ratio: stats.accumulated.ratio24VsOther,
-      };
-    })
-    .sort((a, b) => {
-      if (Number.isFinite(a.ratio) !== Number.isFinite(b.ratio)) return Number.isFinite(a.ratio) ? 1 : -1;
-      return b.ratio - a.ratio || b.hours24 - a.hours24 || a.person.name.localeCompare(b.person.name);
-    });
-
   els.statsRanking.innerHTML = `
     <article class="ranking-card">
       <div class="ranking-head">
         <div>
-          <h3>Ranking 24h / demais horas</h3>
-          <p>Acumulado até ${currentDate.toLocaleDateString("pt-BR", { month: "long", year: "numeric" })}</p>
+          <h3>Comparativo da equipe</h3>
+          <p>Os índices não são somados: cada + ou - pertence ao intervalo entre dois trabalhos. “Maior +” mostra o retorno mais antecipado do período.</p>
         </div>
-      </div>
-      <div class="ranking-list">
-        ${ranking
-          .map(
-            (item, index) => `
-              <div class="ranking-row">
-                <strong>${index + 1}</strong>
-                <span>${item.person.name}</span>
-                <b>${formatRatio(item.ratio)}</b>
-                <small>${item.hours24}h em 24x72 / ${item.otherHours}h em 12x36 + comercial</small>
-              </div>
-            `,
-          )
-          .join("")}
       </div>
     </article>
   `;
 }
 
+function statsComparisonTable(statsList, group, title) {
+  const rows = statsList
+    .slice()
+    .sort((a, b) => a.person.name.localeCompare(b.person.name, "pt-BR"))
+    .map((stats) => {
+      const values = stats[group];
+      return `
+        <tr>
+          <th scope="row">${stats.person.name}<small>${getPersonShift(stats.person)}</small></th>
+          <td>${values.shifts24}</td>
+          <td>${values.shifts12}</td>
+          <td>${values.shiftsBusiness}</td>
+          <td><strong>${values.workedHours}h</strong></td>
+          <td class="owes-rest">${values.earlyReturns}</td>
+          <td class="owes-rest">${values.highestEarlyIndex ? `+${values.highestEarlyIndex}` : "—"}</td>
+          <td class="extra-rest">${values.lateReturns}</td>
+          <td>${values.restrictions}</td>
+        </tr>`;
+    }).join("");
+  return `
+    <article class="stats-comparison-card">
+      <h3>${title}</h3>
+      <div class="stats-table-wrap">
+        <table class="stats-comparison-table">
+          <thead><tr><th>Pessoa</th><th>24x72</th><th>12x36</th><th>Comercial</th><th>Horas</th><th title="Quantidade de retornos antes da folga prevista">Retornos +</th><th>Maior +</th><th title="Quantidade de retornos depois da folga prevista">Retornos -</th><th>Restrição</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </article>`;
+}
+
 function renderStats() {
-  els.statsGrid.innerHTML = "";
   const statsList = calculateStats();
   renderStatsRanking(statsList);
-  statsList.forEach((stats) => {
-    const card = document.createElement("article");
-    card.className = "stat-card";
-    card.innerHTML = `
-      <div class="stat-head">
-        <div>
-          <h3>${stats.person.name}</h3>
-          <span>Regime do mês: ${getPersonShift(stats.person)}</span>
-        </div>
-      </div>
-      <h4 class="metric-section-title">Mês selecionado</h4>
-      <div class="stat-metrics">
-        <div class="metric"><strong>${stats.month.shifts24}</strong><span>Plantões 24x72</span></div>
-        <div class="metric"><strong>${stats.month.shifts12}</strong><span>Escalas 12x36</span></div>
-        <div class="metric"><strong>${stats.month.shiftsBusiness}</strong><span>Dias comerciais</span></div>
-        <div class="metric"><strong>${stats.month.workedHours}h</strong><span>Horas trabalhadas</span></div>
-        <div class="metric"><strong>${formatRatio(stats.month.ratio24VsOther)}</strong><span>24h / outras horas</span></div>
-        <div class="metric"><strong>${formatRestDays(stats.month.restHours)}</strong><span>Total de folgas</span></div>
-        <div class="metric"><strong>${stats.month.restHours}h</strong><span>Horas de folga</span></div>
-        <div class="metric ${restBalanceClass(stats.month.restBalance)}"><strong>${restBalanceLabel(stats.month.restBalance)}</strong><span>Saldo folga do mês</span></div>
-        <div class="metric"><strong>${stats.month.restAlerts}</strong><span>Pontos de conferência</span></div>
-        <div class="metric"><strong>${stats.month.restrictions}</strong><span>Dias com restrição</span></div>
-      </div>
-      <h4 class="metric-section-title">Acumulado até este mês</h4>
-      <div class="stat-metrics">
-        <div class="metric"><strong>${stats.accumulated.shifts24}</strong><span>Plantões 24x72</span></div>
-        <div class="metric"><strong>${stats.accumulated.shifts12}</strong><span>Escalas 12x36</span></div>
-        <div class="metric"><strong>${stats.accumulated.shiftsBusiness}</strong><span>Dias comerciais</span></div>
-        <div class="metric"><strong>${stats.accumulated.workedHours}h</strong><span>Horas trabalhadas</span></div>
-        <div class="metric"><strong>${formatRatio(stats.accumulated.ratio24VsOther)}</strong><span>24h / outras horas</span></div>
-        <div class="metric"><strong>${formatRestDays(stats.accumulated.restHours)}</strong><span>Total de folgas</span></div>
-        <div class="metric"><strong>${stats.accumulated.restHours}h</strong><span>Horas de folga</span></div>
-        <div class="metric ${restBalanceClass(stats.accumulated.restBalance)}"><strong>${restBalanceLabel(stats.accumulated.restBalance)}</strong><span>Saldo folga acumulado</span></div>
-        <div class="metric"><strong>${stats.accumulated.restAlerts}</strong><span>Pontos de conferência</span></div>
-        <div class="metric"><strong>${stats.accumulated.restrictions}</strong><span>Dias com restrição</span></div>
-      </div>
-    `;
-    els.statsGrid.appendChild(card);
-  });
+  const monthName = currentDate.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+  els.statsGrid.innerHTML = [
+    statsComparisonTable(statsList, "month", `Mês selecionado — ${monthName}`),
+    statsComparisonTable(statsList, "accumulated", `Acumulado até ${monthName}`),
+  ].join("");
 }
 
 function renderPeople() {
