@@ -586,6 +586,7 @@ button {
 }
 
 .restriction-people-field {
+  grid-area: people;
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -603,7 +604,7 @@ button {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 7px;
-  max-height: 150px;
+  max-height: 112px;
   overflow-y: auto;
   padding: 10px;
   border: 1px solid var(--line);
@@ -631,6 +632,33 @@ button {
   width: 16px;
   height: 16px;
   margin: 0;
+}
+
+.restriction-create-form {
+  grid-template-areas:
+    "people people people people"
+    "type start end action"
+    "note note note note";
+}
+
+.restriction-create-form > label:has(#restriction-type) {
+  grid-area: type;
+}
+
+.restriction-create-form > label:has(#restriction-start) {
+  grid-area: start;
+}
+
+.restriction-create-form > label:has(#restriction-end) {
+  grid-area: end;
+}
+
+.restriction-create-form > label:has(#restriction-note) {
+  grid-area: note;
+}
+
+.restriction-create-form > button[type="submit"] {
+  grid-area: action;
 }
 
 .holiday-form {
@@ -970,6 +998,16 @@ button {
 
   .form-grid .wide {
     grid-column: auto;
+  }
+
+  .restriction-create-form {
+    grid-template-areas:
+      "people"
+      "type"
+      "start"
+      "end"
+      "note"
+      "action";
   }
 
   .restriction-edit-grid {
