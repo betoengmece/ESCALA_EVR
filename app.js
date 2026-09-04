@@ -582,7 +582,7 @@ function hasFixedAssignmentInDay(personId, dayKey) {
 function keepOnlyFixedAssignments(dayKey, shift) {
   const day = getAssignments(dayKey);
   day[shift] = day[shift].filter((personId) => {
-    const keep = isFixedAssignment(dayKey, shift, personId) && findPerson(personId) && !isRestricted(personId, dayKey);
+    const keep = isFixedAssignment(dayKey, shift, personId) && findPerson(personId) && !isUnavailableForAssignment(personId, dayKey);
     if (!keep) clearFixedAssignment(dayKey, shift, personId);
     return keep;
   });
@@ -653,6 +653,31 @@ function isRestricted(personId, key) {
   });
 }
 
+function isVacationRestriction(restriction) {
+  return normalizeLegacyText(restriction?.type) === "FERIAS";
+}
+
+function isDayBeforeVacation(personId, key) {
+  if (isEmptySlot(personId)) return false;
+  const nextDay = addDaysKey(key, 1);
+  return state.restrictions.some((restriction) => {
+    return restriction.personId === personId && isVacationRestriction(restriction) && restriction.start === nextDay;
+  });
+}
+
+function isUnavailableForAssignment(personId, key) {
+  return isRestricted(personId, key) || isDayBeforeVacation(personId, key);
+}
+
+function removeAssignmentsBlockedByRestriction(restriction) {
+  const blockedStart = isVacationRestriction(restriction) ? addDaysKey(restriction.start, -1) : restriction.start;
+  Object.keys(state.assignments).forEach((key) => {
+    if (key >= blockedStart && key <= restriction.end) {
+      removePersonFromDay(restriction.personId, key);
+    }
+  });
+}
+
 function isHoliday(key) {
   return state.holidays.some((holiday) => holiday.date === key);
 }
@@ -662,12 +687,19 @@ function holidayLabelsForDay(key) {
 }
 
 function restrictionLabelsForDay(key) {
-  return state.restrictions
+  const activeLabels = state.restrictions
     .filter((restriction) => key >= restriction.start && key <= restriction.end)
     .map((restriction) => {
       const person = findPerson(restriction.personId);
       return `${person?.name || "Pessoa"}: ${restriction.type}`;
     });
+  const vacationEveLabels = state.restrictions
+    .filter((restriction) => isVacationRestriction(restriction) && restriction.start === addDaysKey(key, 1))
+    .map((restriction) => {
+      const person = findPerson(restriction.personId);
+      return `${person?.name || "Pessoa"}: não escalar (férias amanhã)`;
+    });
+  return [...activeLabels, ...vacationEveLabels];
 }
 
 function findAssignment(personId, key) {
@@ -834,6 +866,9 @@ function cardRuleWarnings(person, key, shift, restBalance = 0) {
   const personShift = getPersonShiftForDate(person, key);
   if (isRestricted(person.id, key)) {
     warnings.push("Pessoa possui restrição cadastrada neste dia.");
+  }
+  if (isDayBeforeVacation(person.id, key)) {
+    warnings.push("Pessoa não pode ser escalada no dia imediatamente anterior às férias.");
   }
   if (personShift === "Comercial Fixo" && shift !== "Comercial") {
     warnings.push("Comercial Fixo deve ficar apenas na coluna Comercial.");
@@ -1043,6 +1078,14 @@ function countAssignmentsUntil(personId, targetShift, key) {
 function assignPerson(personId, key, targetShift) {
   const person = findPerson(personId);
   if (!person || !targetShift) return;
+  if (!isEmptySlot(personId) && isRestricted(personId, key)) {
+    alert(`${person.name} possui restrição cadastrada em ${formatDate(key)}.`);
+    return;
+  }
+  if (!isEmptySlot(personId) && isDayBeforeVacation(personId, key)) {
+    alert(`${person.name} não pode ser escalado(a) em ${formatDate(key)}, pois as férias começam no dia seguinte.`);
+    return;
+  }
   const originDate = draggedSourceDate || key;
   const originShift = draggedSourceShift || targetShift;
   const sourceSnapshot =
@@ -1080,7 +1123,8 @@ function assignPerson(personId, key, targetShift) {
 
 function addCardByClick(key, targetShift) {
   const options = state.people
-    .filter((person) => !getAssignments(key)[targetShift].includes(person.id));
+    .filter((person) => !getAssignments(key)[targetShift].includes(person.id))
+    .filter((person) => !isUnavailableForAssignment(person.id, key));
   if (targetShift === "24x72") options.push(findPerson(EMPTY_SLOT_ID));
   if (!options.length) return;
   const list = options.map((person, index) => `${index + 1}. ${person.name} (${getPersonShift(person)})`).join("\n");
@@ -1123,7 +1167,7 @@ function orderedReal24Pair(key) {
 }
 
 function fallback24Pairs(monthKeys) {
-  const people24 = state.people.filter((person) => getPersonShift(person) === "24x72" && monthKeys.some((key) => !isRestricted(person.id, key)));
+  const people24 = state.people.filter((person) => getPersonShift(person) === "24x72" && monthKeys.some((key) => !isUnavailableForAssignment(person.id, key)));
   const pairs = [];
   for (let index = 0; index < people24.length; index += 2) {
     const first = people24[index]?.id;
@@ -1137,14 +1181,14 @@ function extend24PairCycle(pairs, monthKeys) {
   const covered = new Set(pairs.flat());
   const missing = state.people
     .filter((person) => getPersonShift(person) === "24x72")
-    .filter((person) => monthKeys.some((key) => !isRestricted(person.id, key)))
+    .filter((person) => monthKeys.some((key) => !isUnavailableForAssignment(person.id, key)))
     .filter((person) => !covered.has(person.id));
 
   const expanded = [...pairs];
   for (let index = 0; index < missing.length; index += 2) {
     const first = missing[index];
     const second = missing[index + 1] || state.people.find((person) => {
-      return getPersonShift(person) === "24x72" && person.id !== first.id && monthKeys.some((key) => !isRestricted(person.id, key));
+      return getPersonShift(person) === "24x72" && person.id !== first.id && monthKeys.some((key) => !isUnavailableForAssignment(person.id, key));
     });
     if (first && second) expanded.push([first.id, second.id]);
   }
@@ -1184,7 +1228,7 @@ function getHistorical24PairCycle(monthKeys) {
 function canUsePersonOnDay(personId, key, targetShift) {
   const person = findPerson(personId);
   if (!person || isEmptySlot(personId)) return false;
-  if (isRestricted(personId, key)) return false;
+  if (isUnavailableForAssignment(personId, key)) return false;
   if (hasFixedAssignmentInDay(personId, key)) return false;
   if (getPersonShiftForDate(person, key) === "Comercial Fixo" && targetShift !== "Comercial") return false;
   if (getPeopleInDay(key).includes(personId)) return false;
@@ -1239,7 +1283,7 @@ function placePersonInShift(key, targetShift, personId) {
 function fill24DayWithPreferredPair(key, preferredPair, monthKeys) {
   const day = getAssignments(key);
   day["24x72"] = day["24x72"].filter((personId) => {
-    return isFixedAssignment(key, "24x72", personId) && findPerson(personId) && !isRestricted(personId, key);
+    return isFixedAssignment(key, "24x72", personId) && findPerson(personId) && !isUnavailableForAssignment(personId, key);
   }).slice(0, 2);
 
   const fixedCount = day["24x72"].length;
@@ -1272,7 +1316,7 @@ function fillCommercialByAvailability(monthKeys) {
     state.people
       .filter((person) => isCommercialRegime(getPersonShiftForDate(person, key)))
       .filter((person) => !getPeopleInDay(key).includes(person.id))
-      .filter((person) => !isRestricted(person.id, key))
+      .filter((person) => !isUnavailableForAssignment(person.id, key))
       .filter((person) => !hasFixedAssignmentInDay(person.id, key))
       .filter((person) => respectsRestAround(person.id, key, "Comercial"))
       .forEach((person) => {
@@ -1329,7 +1373,7 @@ function placeMissingPersonInOwnRegime(person, monthKeys) {
 
 function ensureEveryAvailablePersonWorks(monthKeys) {
   state.people.forEach((person) => {
-    if (!monthKeys.some((key) => !isRestricted(person.id, key))) return;
+    if (!monthKeys.some((key) => !isUnavailableForAssignment(person.id, key))) return;
     if (countMonthTotalAssignments(person.id, monthKeys) > 0) return;
     placeMissingPersonInOwnRegime(person, monthKeys);
   });
@@ -1370,13 +1414,18 @@ function firstAvailableKeyNextMonth(person) {
   });
   const personShift = getPersonShift(person, monthKey(nextMonth));
   return nextMonthKeys.find((key) => {
-    if (isRestricted(person.id, key)) return false;
+    if (isUnavailableForAssignment(person.id, key)) return false;
     return !isCommercialRegime(personShift) || isBusinessWorkday(key);
   }) || null;
 }
 
 function validateCurrentSchedule() {
   const monthKeys = getMonthKeys();
+  const vacationEveConflicts = monthKeys.flatMap((key) => {
+    return SHIFT_TYPES.flatMap((shift) => getAssignments(key)[shift]
+      .filter((personId) => !isEmptySlot(personId) && isDayBeforeVacation(personId, key))
+      .map((personId) => ({ person: findPerson(personId), key })));
+  }).filter(({ person }) => person);
   const positiveIndexes = monthKeys.flatMap((key) => {
     const day = getAssignments(key);
     return SHIFT_TYPES.flatMap((shift) => day[shift]
@@ -1386,7 +1435,7 @@ function validateCurrentSchedule() {
   }).sort((a, b) => b.index - a.index || a.key.localeCompare(b.key) || a.person.name.localeCompare(b.person.name));
 
   const missingPeople = state.people
-    .filter((person) => monthKeys.some((key) => !isRestricted(person.id, key)))
+    .filter((person) => monthKeys.some((key) => !isUnavailableForAssignment(person.id, key)))
     .filter((person) => countMonthTotalAssignments(person.id, monthKeys) === 0)
     .map((person) => {
       const nextKey = firstAvailableKeyNextMonth(person);
@@ -1398,6 +1447,11 @@ function validateCurrentSchedule() {
     .sort((a, b) => a.person.name.localeCompare(b.person.name));
 
   const sections = [];
+  if (vacationEveConflicts.length) {
+    sections.push(`Escalas na véspera das férias:\n${vacationEveConflicts.map(({ person, key }) => `• ${person.name}: ${formatDate(key)}`).join("\n")}`);
+  } else {
+    sections.push("Escalas na véspera das férias: nenhuma.");
+  }
   if (positiveIndexes.length) {
     sections.push(`Índice +1 ou superior:\n${positiveIndexes.map(({ person, key, index }) => `• ${person.name}: ${restBalanceLabel(index)} em ${formatDate(key)}`).join("\n")}`);
   } else {
@@ -1510,14 +1564,14 @@ function isRequiredPlantonista(person, monthKeys = getMonthKeys()) {
   if (!person || isEmptySlot(person.id)) return false;
   const personShift = getPersonShift(person);
   if (!["24x72", "12x36"].includes(personShift)) return false;
-  return monthKeys.some((key) => !isRestricted(person.id, key));
+  return monthKeys.some((key) => !isUnavailableForAssignment(person.id, key));
 }
 
 function calculateMonthScore(monthKeys = getMonthKeys()) {
   let score = 0;
   const people24 = state.people.filter((person) => getPersonShift(person) === "24x72");
   const available24Total = people24.reduce((total, person) => {
-    return total + monthKeys.filter((key) => !isRestricted(person.id, key)).length;
+    return total + monthKeys.filter((key) => !isUnavailableForAssignment(person.id, key)).length;
   }, 0);
   const total24Slots = monthKeys.length * 2;
 
@@ -1534,7 +1588,7 @@ function calculateMonthScore(monthKeys = getMonthKeys()) {
   state.people.forEach((person) => {
     const personShift = getPersonShift(person);
     const totalWork = SHIFT_TYPES.reduce((total, shift) => total + countMonthAssignments(person.id, shift, monthKeys), 0);
-    const availableDays = monthKeys.filter((key) => !isRestricted(person.id, key)).length;
+    const availableDays = monthKeys.filter((key) => !isUnavailableForAssignment(person.id, key)).length;
     if (availableDays && !totalWork) score += 100000;
 
     if (personShift === "24x72" && available24Total) {
@@ -1552,7 +1606,7 @@ function calculateMonthScore(monthKeys = getMonthKeys()) {
     }
     if (personShift === "Comercial") {
       const shiftsBusiness = countMonthAssignments(person.id, "Comercial", monthKeys);
-      const expectedBusiness = monthKeys.filter((key) => isBusinessWorkday(key) && !isRestricted(person.id, key)).length;
+      const expectedBusiness = monthKeys.filter((key) => isBusinessWorkday(key) && !isUnavailableForAssignment(person.id, key)).length;
       score += shiftsBusiness === 0 && expectedBusiness ? 50000 : 0;
       score += Math.pow(shiftsBusiness - expectedBusiness, 2) * 3;
     }
@@ -1576,7 +1630,7 @@ function repairMissingBaseRegimes(monthKeys = getMonthKeys()) {
         const personIndex = state.people.filter((item) => getPersonShift(item) === "12x36").findIndex((item) => item.id === person.id);
         const shouldWork = (index + personIndex) % 2 === 0;
         const day = getAssignments(key);
-        if (shouldWork && !getPeopleInDay(key).includes(person.id) && !isRestricted(person.id, key) && respectsRestAround(person.id, key, "12x36")) {
+        if (shouldWork && !getPeopleInDay(key).includes(person.id) && !isUnavailableForAssignment(person.id, key) && respectsRestAround(person.id, key, "12x36")) {
           day["12x36"].push(person.id);
         }
       });
@@ -1585,7 +1639,7 @@ function repairMissingBaseRegimes(monthKeys = getMonthKeys()) {
     if (personShift === "Comercial" && countMonthAssignments(person.id, "Comercial", monthKeys) === 0) {
       monthKeys.forEach((key) => {
         const day = getAssignments(key);
-        if (isBusinessWorkday(key) && !getPeopleInDay(key).includes(person.id) && !isRestricted(person.id, key) && respectsRestAround(person.id, key, "Comercial")) {
+        if (isBusinessWorkday(key) && !getPeopleInDay(key).includes(person.id) && !isUnavailableForAssignment(person.id, key) && respectsRestAround(person.id, key, "Comercial")) {
           day.Comercial.push(person.id);
         }
       });
@@ -1615,7 +1669,7 @@ function isHardValidDay(key) {
   for (const shift of SHIFT_TYPES) {
     for (const personId of day[shift]) {
       const person = findPerson(personId);
-      if (!person || isRestricted(personId, key)) return false;
+      if (!person || isUnavailableForAssignment(personId, key)) return false;
       if (!isEmptySlot(personId) && seen.has(personId)) return false;
       if (getPersonShiftForDate(person, key) === "Comercial Fixo" && shift !== "Comercial") return false;
       if (!isEmptySlot(personId)) seen.add(personId);
@@ -1661,7 +1715,7 @@ function generateOptimizationMoves(monthKeys) {
         .filter((person) => person.id !== personOutId)
         .filter((person) => !day["24x72"].includes(person.id))
         .filter((person) => getPersonShift(person) !== "Comercial Fixo")
-        .filter((person) => !isRestricted(person.id, key))
+        .filter((person) => !isUnavailableForAssignment(person.id, key))
         .filter((person) => !hasFixedAssignmentInDay(person.id, key))
         .filter((person) => {
           const sourceShift = assignedShiftInDay(person.id, key);
@@ -1682,7 +1736,7 @@ function generateOptimizationMoves(monthKeys) {
       if (slotA.key === slotB.key) return;
       if (isFixedAssignment(slotB.key, slotB.shift, slotB.personId)) return;
       if (getPersonShift(findPerson(slotB.personId)) === "Comercial Fixo") return;
-      if (isRestricted(slotA.personId, slotB.key) || isRestricted(slotB.personId, slotA.key)) return;
+      if (isUnavailableForAssignment(slotA.personId, slotB.key) || isUnavailableForAssignment(slotB.personId, slotA.key)) return;
       if (hasFixedAssignmentInDay(slotA.personId, slotB.key) || hasFixedAssignmentInDay(slotB.personId, slotA.key)) return;
       moves.push({ type: "swap", slotA, slotB });
     });
@@ -1781,7 +1835,7 @@ function complete24PairsForDay(key) {
     .filter((person) => !fixed24.includes(person.id))
     .filter((person) => !blocked.has(person.id))
     .filter((person) => getPersonShiftForDate(person, key) !== "Comercial Fixo")
-    .filter((person) => !isRestricted(person.id, key))
+    .filter((person) => !isUnavailableForAssignment(person.id, key))
     .map((person) => person.id);
   const candidatesWithEmpty = fixed24.includes(EMPTY_SLOT_ID) ? candidates : [...candidates, EMPTY_SLOT_ID];
 
@@ -1805,12 +1859,12 @@ function finalBeamScore(beam, monthKeys) {
   let score = beam.score;
   const people24 = state.people.filter((person) => getPersonShift(person) === "24x72");
   const available24Total = people24.reduce((total, person) => {
-    return total + monthKeys.filter((key) => !isRestricted(person.id, key)).length;
+    return total + monthKeys.filter((key) => !isUnavailableForAssignment(person.id, key)).length;
   }, 0);
   const total24Slots = monthKeys.length * 2;
 
   state.people.forEach((person) => {
-    const availableDays = monthKeys.filter((key) => !isRestricted(person.id, key)).length;
+    const availableDays = monthKeys.filter((key) => !isUnavailableForAssignment(person.id, key)).length;
     const count24 = beam.counts[person.id] || 0;
     const personShift = getPersonShift(person);
 
@@ -1936,12 +1990,12 @@ function finalCompleteBeamScore(beam, monthKeys, cyclePairs) {
   let score = beam.score;
   const people24 = state.people.filter((person) => getPersonShift(person) === "24x72");
   const available24Total = people24.reduce((total, person) => {
-    return total + monthKeys.filter((key) => !isRestricted(person.id, key)).length;
+    return total + monthKeys.filter((key) => !isUnavailableForAssignment(person.id, key)).length;
   }, 0);
   const total24Slots = monthKeys.length * 2;
 
   state.people.forEach((person) => {
-    const availableDays = monthKeys.filter((key) => !isRestricted(person.id, key)).length;
+    const availableDays = monthKeys.filter((key) => !isUnavailableForAssignment(person.id, key)).length;
     if (!availableDays) return;
     const count24 = beam.counts[person.id] || 0;
     const personShift = getPersonShift(person);
@@ -2021,7 +2075,7 @@ function findBestCoveragePlacement(person, monthKeys) {
   let best = null;
 
   monthKeys.forEach((key) => {
-    if (isRestricted(person.id, key) || hasFixedAssignmentInDay(person.id, key)) return;
+    if (isUnavailableForAssignment(person.id, key) || hasFixedAssignmentInDay(person.id, key)) return;
     const day = getAssignments(key);
     const indexes = day["24x72"].length < 2 ? [day["24x72"].length] : [0, 1];
 
@@ -2077,7 +2131,7 @@ function place12x36Pattern(people12, phases, monthKeys) {
       const day = getAssignments(key);
       if (day["12x36"].includes(person.id)) return;
       if (getPeopleInDay(key).includes(person.id)) return;
-      if (isRestricted(person.id, key) || hasFixedAssignmentInDay(person.id, key)) return;
+      if (isUnavailableForAssignment(person.id, key) || hasFixedAssignmentInDay(person.id, key)) return;
       day["12x36"].push(person.id);
     });
   });
@@ -2095,7 +2149,7 @@ function score12x36Pattern(people12, monthKeys) {
   });
 
   people12.forEach((person) => {
-    const availableDays = monthKeys.filter((key) => !isRestricted(person.id, key)).length;
+    const availableDays = monthKeys.filter((key) => !isUnavailableForAssignment(person.id, key)).length;
     const expectedWork = Math.max(1, Math.floor(availableDays / 2));
     const totalWork = countMonthAssignments(person.id, "12x36", monthKeys) + countMonthAssignments(person.id, "24x72", monthKeys);
     if (availableDays && totalWork === 0) score += 100000;
@@ -2177,7 +2231,7 @@ function autoFillCompleteCoverage() {
   fillCommercialByAvailability(monthKeys);
   ensureEveryAvailablePersonWorks(monthKeys);
   const stillMissing = state.people.filter((person) => {
-    return monthKeys.some((key) => !isRestricted(person.id, key)) && countMonthTotalAssignments(person.id, monthKeys) === 0;
+    return monthKeys.some((key) => !isUnavailableForAssignment(person.id, key)) && countMonthTotalAssignments(person.id, monthKeys) === 0;
   });
   saveState();
   renderAll();
@@ -2193,7 +2247,7 @@ function chooseCandidate(key, targetShift, alreadyAssigned = []) {
     .filter((person) => !alreadyAssigned.includes(person.id))
     .filter((person) => !hasFixedAssignmentInDay(person.id, key))
     .filter((person) => getPersonShift(person) !== "Comercial Fixo" || targetShift === "Comercial")
-    .filter((person) => !isRestricted(person.id, key))
+    .filter((person) => !isUnavailableForAssignment(person.id, key))
     .map((person) => {
       const rest = hoursSinceLastShift(person.id, key);
       const personShift = getPersonShift(person);
@@ -2228,7 +2282,7 @@ function autoFillBaseRegimes() {
       .filter((person) => getPersonShift(person) === "12x36")
       .forEach((person, personIndex) => {
         const shouldWork = (index + personIndex) % 2 === 0;
-        if (shouldWork && !getPeopleInDay(key).includes(person.id) && !isRestricted(person.id, key) && respectsRestAround(person.id, key, "12x36")) {
+        if (shouldWork && !getPeopleInDay(key).includes(person.id) && !isUnavailableForAssignment(person.id, key) && respectsRestAround(person.id, key, "12x36")) {
           day["12x36"].push(person.id);
         }
       });
@@ -2237,7 +2291,7 @@ function autoFillBaseRegimes() {
       state.people
         .filter((person) => ["Comercial", "Comercial Fixo"].includes(getPersonShift(person)))
         .forEach((person) => {
-          if (!getPeopleInDay(key).includes(person.id) && !isRestricted(person.id, key) && respectsRestAround(person.id, key, "Comercial")) {
+          if (!getPeopleInDay(key).includes(person.id) && !isUnavailableForAssignment(person.id, key) && respectsRestAround(person.id, key, "Comercial")) {
             day.Comercial.push(person.id);
           }
         });
@@ -2251,7 +2305,7 @@ function autoFill24x72() {
   });
   getMonthKeys().forEach((key) => {
     const day = getAssignments(key);
-    day["24x72"] = day["24x72"].filter((id) => findPerson(id) && !isRestricted(id, key)).slice(0, 2);
+    day["24x72"] = day["24x72"].filter((id) => findPerson(id) && !isUnavailableForAssignment(id, key)).slice(0, 2);
     while (day["24x72"].length < 2) {
       const person = chooseCandidate(key, "24x72", day["24x72"]);
       if (!person) break;
@@ -3063,12 +3117,7 @@ function updateRestrictionFromEditItem(id) {
   restriction.start = start;
   restriction.end = end;
   restriction.note = valueFor("note").trim();
-
-  Object.keys(state.assignments).forEach((key) => {
-    if (key >= start && key <= end) {
-      removePersonFromDay(restriction.personId, key);
-    }
-  });
+  removeAssignmentsBlockedByRestriction(restriction);
 
   editingRestrictionId = null;
   saveState();
@@ -3229,19 +3278,16 @@ els.restrictionForm.addEventListener("submit", (event) => {
     return;
   }
   personIds.forEach((personId) => {
-    state.restrictions.push({
+    const restriction = {
       id: crypto.randomUUID(),
       personId,
       type: els.restrictionType.value,
       start,
       end,
       note: els.restrictionNote.value.trim(),
-    });
-  });
-  Object.keys(state.assignments).forEach((key) => {
-    if (key >= start && key <= end) {
-      personIds.forEach((personId) => removePersonFromDay(personId, key));
-    }
+    };
+    state.restrictions.push(restriction);
+    removeAssignmentsBlockedByRestriction(restriction);
   });
   els.restrictionForm.reset();
   saveState();
