@@ -665,12 +665,26 @@ function isDayBeforeVacation(personId, key) {
   });
 }
 
+function localTodayKey() {
+  const now = new Date();
+  return dateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate()));
+}
+
+function isHistoricalDate(key) {
+  return key < localTodayKey();
+}
+
+function isVacationEveBlocked(personId, key) {
+  return !isHistoricalDate(key) && isDayBeforeVacation(personId, key);
+}
+
 function isUnavailableForAssignment(personId, key) {
-  return isRestricted(personId, key) || isDayBeforeVacation(personId, key);
+  return isRestricted(personId, key) || isVacationEveBlocked(personId, key);
 }
 
 function removeAssignmentsBlockedByRestriction(restriction) {
-  const blockedStart = isVacationRestriction(restriction) ? addDaysKey(restriction.start, -1) : restriction.start;
+  const restrictionStart = isVacationRestriction(restriction) ? addDaysKey(restriction.start, -1) : restriction.start;
+  const blockedStart = restrictionStart < localTodayKey() ? localTodayKey() : restrictionStart;
   Object.keys(state.assignments).forEach((key) => {
     if (key >= blockedStart && key <= restriction.end) {
       removePersonFromDay(restriction.personId, key);
@@ -697,7 +711,8 @@ function restrictionLabelsForDay(key) {
     .filter((restriction) => isVacationRestriction(restriction) && restriction.start === addDaysKey(key, 1))
     .map((restriction) => {
       const person = findPerson(restriction.personId);
-      return `${person?.name || "Pessoa"}: não escalar (férias amanhã)`;
+      const label = isHistoricalDate(key) ? "escala histórica na véspera das férias" : "não escalar (férias amanhã)";
+      return `${person?.name || "Pessoa"}: ${label}`;
     });
   return [...activeLabels, ...vacationEveLabels];
 }
@@ -868,7 +883,9 @@ function cardRuleWarnings(person, key, shift, restBalance = 0) {
     warnings.push("Pessoa possui restrição cadastrada neste dia.");
   }
   if (isDayBeforeVacation(person.id, key)) {
-    warnings.push("Pessoa não pode ser escalada no dia imediatamente anterior às férias.");
+    warnings.push(isHistoricalDate(key)
+      ? "Irregularidade histórica: pessoa trabalhou no dia imediatamente anterior às férias. O registro foi preservado."
+      : "Pessoa não pode ser escalada no dia imediatamente anterior às férias.");
   }
   if (personShift === "Comercial Fixo" && shift !== "Comercial") {
     warnings.push("Comercial Fixo deve ficar apenas na coluna Comercial.");
@@ -1082,7 +1099,7 @@ function assignPerson(personId, key, targetShift) {
     alert(`${person.name} possui restrição cadastrada em ${formatDate(key)}.`);
     return;
   }
-  if (!isEmptySlot(personId) && isDayBeforeVacation(personId, key)) {
+  if (!isEmptySlot(personId) && isVacationEveBlocked(personId, key)) {
     alert(`${person.name} não pode ser escalado(a) em ${formatDate(key)}, pois as férias começam no dia seguinte.`);
     return;
   }
