@@ -882,36 +882,28 @@ function restBalanceLabel(balance) {
   return String(balance);
 }
 
-function cardRuleWarnings(person, key, shift, restBalance = 0) {
+function cardRuleIssues(person, key, shift) {
   if (!person || !key || !shift || isEmptySlot(person.id)) return [];
-  const warnings = [];
+  const issues = [];
   const personShift = getPersonShiftForDate(person, key);
   if (isRestricted(person.id, key)) {
-    warnings.push("Pessoa possui restrição cadastrada neste dia.");
+    issues.push({ category: "restriction", message: "Pessoa possui restrição cadastrada neste dia." });
   }
   if (shift === "24x72" && isDayBeforeVacation(person.id, key)) {
-    warnings.push(isHistoricalDate(key)
-      ? "Irregularidade histórica: pessoa trabalhou no dia imediatamente anterior às férias. O registro foi preservado."
-      : "Pessoa não pode ser escalada no dia imediatamente anterior às férias.");
+    issues.push({
+      category: "vacation-eve",
+      message: isHistoricalDate(key)
+        ? "Irregularidade histórica: pessoa trabalhou no dia imediatamente anterior às férias. O registro foi preservado."
+        : "Pessoa não pode ser escalada no dia imediatamente anterior às férias.",
+    });
   }
   if (personShift === "Comercial Fixo" && shift !== "Comercial") {
-    warnings.push("Comercial Fixo deve ficar apenas na coluna Comercial.");
+    issues.push({ category: "fixed-regime", message: "Comercial Fixo deve ficar apenas na coluna Comercial." });
   }
   if (shift === "24x72" && getAssignments(key)["24x72"].length > 2) {
-    warnings.push("24x72 está com mais de 2 plantonistas neste dia.");
+    issues.push({ category: "capacity", message: "24x72 está com mais de 2 plantonistas neste dia." });
   }
-  const isSuspendedRest = reviewMode && restBalance && isRestrictionSuspendedRestBalance(person.id, key);
-  if (reviewMode && restBalance > 0 && isSuspendedRest) {
-    warnings.push(`Saldo pós-restrição: voltou ${restBalance} dia(s) antes da folga compensatória.`);
-  } else if (reviewMode && restBalance > 0) {
-    warnings.push(`Folga insuficiente: voltou ${restBalance} dia(s) antes do previsto.`);
-  }
-  if (reviewMode && restBalance < 0 && isSuspendedRest) {
-    warnings.push(`Saldo pós-restrição: voltou ${Math.abs(restBalance)} dia(s) depois da folga compensatória.`);
-  } else if (reviewMode && restBalance < 0) {
-    warnings.push(`Folga a mais: voltou ${Math.abs(restBalance)} dia(s) depois do previsto.`);
-  }
-  return warnings;
+  return issues;
 }
 
 function personCard(person, subtitle = null, sourceDate = null, sourceShift = null) {
@@ -929,17 +921,23 @@ function personCard(person, subtitle = null, sourceDate = null, sourceShift = nu
   if (restBalance) {
     card.classList.add("has-rest-alert", suspendedRestBalance ? "suspended-rest" : restBalanceClass(restBalance));
   }
-  const warnings = sourceDate && sourceShift ? cardRuleWarnings(person, sourceDate, sourceShift, restBalance) : [];
-  if (warnings.length) card.classList.add("has-rule-alert");
+  const issues = sourceDate && sourceShift ? cardRuleIssues(person, sourceDate, sourceShift) : [];
+  if (issues.length) card.classList.add("has-rule-alert", `rule-${issues[0].category}`);
   card.draggable = true;
   card.dataset.personId = person.id;
   if (sourceDate) card.dataset.sourceDate = sourceDate;
   if (sourceShift) card.dataset.sourceShift = sourceShift;
   const removeButton = sourceDate ? '<button class="card-remove" type="button" title="Remover card">×</button>' : "";
-  const restBadgeTitle = suspendedRestBalance ? "Saldo de folga pós-restrição manual" : "Saldo de folga";
+  const restBadgeTitle = suspendedRestBalance
+    ? `Saldo pós-restrição: ${restBalance > 0 ? `voltou ${restBalance} dia(s) antes` : `voltou ${Math.abs(restBalance)} dia(s) depois`} da folga compensatória.`
+    : restBalance > 0
+      ? `Folga insuficiente: voltou ${restBalance} dia(s) antes do previsto.`
+      : `Folga a mais: voltou ${Math.abs(restBalance)} dia(s) depois do previsto.`;
   const restBadge = restBalance ? `<b class="rest-badge" title="${restBadgeTitle}">${restBalanceLabel(restBalance)}</b>` : "";
-  const warningBadge = warnings.length ? `<b class="rule-alert" title="${escapeHtmlValue(warnings.join("\n"))}">!</b>` : "";
-  card.innerHTML = `<strong>${person.name}</strong><span>${label}</span>${restBadge}${warningBadge}${removeButton}`;
+  const warningBadges = issues.length
+    ? `<span class="rule-alerts">${issues.map((issue) => `<b class="rule-alert issue-${issue.category}" title="${escapeHtmlValue(issue.message)}">!</b>`).join("")}</span>`
+    : "";
+  card.innerHTML = `<strong>${person.name}</strong><span>${label}</span>${restBadge}${warningBadges}${removeButton}`;
   card.querySelector(".card-remove")?.addEventListener("click", (event) => {
     event.stopPropagation();
     removePersonFromDay(person.id, sourceDate, sourceShift);
@@ -1450,6 +1448,13 @@ function validateCurrentSchedule() {
       .filter((personId) => !isEmptySlot(personId) && isDayBeforeVacation(personId, key))
       .map((personId) => ({ person: findPerson(personId), key }));
   }).filter(({ person }) => person);
+  const vacationRuleProblems = state.restrictions
+    .filter((restriction) => isVacationRestriction(restriction))
+    .filter((restriction) => restriction.start >= monthKeys[0] && restriction.start <= monthKeys[monthKeys.length - 1])
+    .flatMap((restriction) => {
+      const person = findPerson(restriction.personId);
+      return vacationRuleIssues(restriction, restriction.id).map((issue) => `• ${person?.name || "Pessoa"}: ${issue.message}`);
+    });
   const positiveIndexes = monthKeys.flatMap((key) => {
     const day = getAssignments(key);
     return SHIFT_TYPES.flatMap((shift) => day[shift]
@@ -1475,6 +1480,11 @@ function validateCurrentSchedule() {
     sections.push(`Escalas 24x72 na véspera das férias:\n${vacationEveConflicts.map(({ person, key }) => `• ${person.name}: ${formatDate(key)}`).join("\n")}`);
   } else {
     sections.push("Escalas 24x72 na véspera das férias: nenhuma.");
+  }
+  if (vacationRuleProblems.length) {
+    sections.push(`Alertas nas férias iniciadas neste mês:\n${[...new Set(vacationRuleProblems)].join("\n")}`);
+  } else {
+    sections.push("Alertas legais nas férias iniciadas neste mês: nenhum.");
   }
   if (positiveIndexes.length) {
     sections.push(`Índice +1 ou superior:\n${positiveIndexes.map(({ person, key, index }) => `• ${person.name}: ${restBalanceLabel(index)} em ${formatDate(key)}`).join("\n")}`);
@@ -2970,6 +2980,98 @@ function alertRestrictionOverlaps(conflicts) {
   alert(`Não foi possível salvar. Já existe restrição no mesmo período para:\n\n${lines}\n\nAltere o período ou desmarque essas pessoas.`);
 }
 
+function vacationPeriodDays(restriction) {
+  return dayDistance(restriction.start, addDaysKey(restriction.end, 1));
+}
+
+function vacationRuleIssues(restriction, ignoredRestrictionId = null) {
+  if (!isVacationRestriction(restriction) || !restriction.start || !restriction.end) return [];
+  const issues = [];
+  const startDate = new Date(`${restriction.start}T12:00:00`);
+  const weekday = startDate.getDay();
+  const weekdayName = startDate.toLocaleDateString("pt-BR", { weekday: "long" });
+
+  if (weekday === 0 || weekday === 6) {
+    issues.push({
+      category: "weekend",
+      message: `As férias começam em ${weekdayName}. O início deve ocorrer em dia útil, sem coincidir com o repouso semanal.`,
+    });
+  } else if (weekday === 5) {
+    issues.push({
+      category: "weekly-rest",
+      message: "As férias começam na sexta-feira, dentro dos dois dias que antecedem o repouso semanal usual de domingo.",
+    });
+  }
+
+  const holidayOnStart = state.holidays.find((holiday) => holiday.date === restriction.start);
+  if (holidayOnStart) {
+    issues.push({
+      category: "holiday",
+      message: `As férias começam no feriado “${holidayOnStart.name}”.`,
+    });
+  }
+
+  for (let offset = 1; offset <= 2; offset += 1) {
+    const holidayKey = addDaysKey(restriction.start, offset);
+    const holiday = state.holidays.find((item) => item.date === holidayKey);
+    if (holiday) {
+      issues.push({
+        category: "before-holiday",
+        message: `As férias começam ${offset} dia(s) antes do feriado “${holiday.name}” (${formatDate(holiday.date)}).`,
+      });
+    }
+  }
+
+  const periodDays = vacationPeriodDays(restriction);
+  if (periodDays < 5) {
+    issues.push({
+      category: "short-period",
+      message: `O período tem ${periodDays} dia(s). Um período fracionado de férias não pode ter menos de 5 dias corridos.`,
+    });
+  }
+
+  const year = restriction.start.slice(0, 4);
+  const yearStart = `${year}-01-01`;
+  const yearEnd = `${year}-12-31`;
+  const periods = state.restrictions
+    .filter((item) => item.id !== ignoredRestrictionId)
+    .filter((item) => item.personId === restriction.personId && isVacationRestriction(item))
+    .filter((item) => item.start <= yearEnd && item.end >= yearStart)
+    .concat(restriction);
+
+  if (periods.length > 3) {
+    issues.push({
+      category: "too-many-periods",
+      message: `Há ${periods.length} períodos de férias em ${year}. A regra geral permite no máximo 3 períodos.`,
+    });
+  } else if (periods.length === 3 && !periods.some((item) => vacationPeriodDays(item) >= 14)) {
+    issues.push({
+      category: "missing-long-period",
+      message: "Nos 3 períodos cadastrados, nenhum possui ao menos 14 dias corridos.",
+    });
+  }
+
+  return issues;
+}
+
+function vacationIssuesHtml(issues) {
+  if (!issues.length) return "";
+  return `<div class="vacation-rule-warnings">${issues
+    .map((issue) => `<span class="vacation-rule-warning issue-${issue.category}" title="${escapeHtmlValue(issue.message)}">! ${escapeHtmlValue(issue.message)}</span>`)
+    .join("")}</div>`;
+}
+
+function confirmVacationRuleIssues(restrictions, ignoredRestrictionId = null) {
+  const lines = restrictions.flatMap((restriction) => {
+    const person = findPerson(restriction.personId);
+    return vacationRuleIssues(restriction, ignoredRestrictionId)
+      .map((issue) => `• ${person?.name || "Pessoa"}: ${issue.message}`);
+  });
+  const uniqueLines = [...new Set(lines)];
+  if (!uniqueLines.length) return true;
+  return confirm(`Atenção às regras usuais de férias (art. 134, §§ 1º e 3º da CLT):\n\n${uniqueLines.join("\n")}\n\nDeseja salvar mesmo assim?`);
+}
+
 function restrictionTypeOptions(selectedType) {
   const types = [...new Set([...RESTRICTION_TYPES, selectedType].filter(Boolean))];
   return types.map((type) => `<option value="${type}" ${type === selectedType ? "selected" : ""}>${type}</option>`).join("");
@@ -3073,7 +3175,7 @@ function renderVacationCheck() {
   `;
 }
 
-function renderRestrictionEditItem(restriction, person) {
+function renderRestrictionEditItem(restriction, person, vacationIssues = []) {
   return `
     <div class="restriction-edit-grid">
       <label>
@@ -3097,6 +3199,7 @@ function renderRestrictionEditItem(restriction, person) {
         <input data-edit-field="note" type="text" value="${escapeHtmlValue(restriction.note)}" />
       </label>
     </div>
+    ${vacationIssuesHtml(vacationIssues)}
     <div class="restriction-actions">
       <button class="primary-action compact-action" type="button" data-save-restriction="${restriction.id}">Salvar</button>
       <button class="secondary-action compact-action" type="button" data-cancel-restriction-edit="${restriction.id}">Cancelar</button>
@@ -3105,11 +3208,12 @@ function renderRestrictionEditItem(restriction, person) {
   `;
 }
 
-function renderRestrictionViewItem(restriction, person) {
+function renderRestrictionViewItem(restriction, person, vacationIssues = []) {
   return `
     <div>
       <h3>${person?.name || "Pessoa removida"} - ${restriction.type}</h3>
       <p>${formatDate(restriction.start)} até ${formatDate(restriction.end)}${restriction.note ? ` - ${restriction.note}` : ""}</p>
+      ${vacationIssuesHtml(vacationIssues)}
     </div>
     <div class="restriction-actions">
       <button class="secondary-action compact-action" type="button" data-edit-restriction="${restriction.id}">Editar</button>
@@ -3132,16 +3236,21 @@ function updateRestrictionFromEditItem(id) {
   const restriction = state.restrictions.find((entry) => entry.id === id);
   if (!restriction) return;
   const personId = valueFor("personId");
+  const proposedRestriction = {
+    ...restriction,
+    personId,
+    type: valueFor("type"),
+    start,
+    end,
+    note: valueFor("note").trim(),
+  };
   const conflicts = overlappingRestrictions([personId], start, end, id);
   if (conflicts.length) {
     alertRestrictionOverlaps(conflicts);
     return;
   }
-  restriction.personId = personId;
-  restriction.type = valueFor("type");
-  restriction.start = start;
-  restriction.end = end;
-  restriction.note = valueFor("note").trim();
+  if (!confirmVacationRuleIssues([proposedRestriction], id)) return;
+  Object.assign(restriction, proposedRestriction);
   removeAssignmentsBlockedByRestriction(restriction);
 
   editingRestrictionId = null;
@@ -3159,10 +3268,14 @@ function renderRestrictions() {
     .sort((a, b) => a.start.localeCompare(b.start));
   filteredRestrictions.forEach((restriction) => {
     const person = findPerson(restriction.personId);
+    const vacationIssues = vacationRuleIssues(restriction, restriction.id);
     const item = document.createElement("article");
-    item.className = `restriction-item ${editingRestrictionId === restriction.id ? "is-editing" : ""}`;
+    const vacationIssueClass = vacationIssues.length ? `has-vacation-issues vacation-issue-${vacationIssues[0].category}` : "";
+    item.className = `restriction-item ${editingRestrictionId === restriction.id ? "is-editing" : ""} ${vacationIssueClass}`.trim();
     item.dataset.restrictionId = restriction.id;
-    item.innerHTML = editingRestrictionId === restriction.id ? renderRestrictionEditItem(restriction, person) : renderRestrictionViewItem(restriction, person);
+    item.innerHTML = editingRestrictionId === restriction.id
+      ? renderRestrictionEditItem(restriction, person, vacationIssues)
+      : renderRestrictionViewItem(restriction, person, vacationIssues);
     els.restrictionList.appendChild(item);
   });
 
@@ -3302,15 +3415,16 @@ els.restrictionForm.addEventListener("submit", (event) => {
     alertRestrictionOverlaps(conflicts);
     return;
   }
-  personIds.forEach((personId) => {
-    const restriction = {
-      id: crypto.randomUUID(),
-      personId,
-      type: els.restrictionType.value,
-      start,
-      end,
-      note: els.restrictionNote.value.trim(),
-    };
+  const restrictions = personIds.map((personId) => ({
+    id: crypto.randomUUID(),
+    personId,
+    type: els.restrictionType.value,
+    start,
+    end,
+    note: els.restrictionNote.value.trim(),
+  }));
+  if (!confirmVacationRuleIssues(restrictions)) return;
+  restrictions.forEach((restriction) => {
     state.restrictions.push(restriction);
     removeAssignmentsBlockedByRestriction(restriction);
   });

@@ -242,6 +242,22 @@ button {
   padding-left: 22px;
 }
 
+.person-card.rule-restriction {
+  box-shadow: inset 0 0 0 1px #c83f4d;
+}
+
+.person-card.rule-vacation-eve {
+  box-shadow: inset 0 0 0 1px #7650b7;
+}
+
+.person-card.rule-fixed-regime {
+  box-shadow: inset 0 0 0 1px #d47b13;
+}
+
+.person-card.rule-capacity {
+  box-shadow: inset 0 0 0 1px #b83280;
+}
+
 .person-card.owes-rest {
   background: #fff0f0;
   border-color: rgba(186, 59, 70, 0.75);
@@ -284,10 +300,15 @@ button {
   background: #7c5cc4;
 }
 
-.rule-alert {
+.rule-alerts {
   position: absolute;
   left: 5px;
   bottom: 3px;
+  display: flex;
+  gap: 2px;
+}
+
+.rule-alert {
   display: grid;
   place-items: center;
   width: 14px;
@@ -298,6 +319,26 @@ button {
   font-size: 10px;
   font-weight: 900;
   line-height: 1;
+}
+
+.rule-alert.issue-restriction {
+  background: #c83f4d;
+  color: #fff;
+}
+
+.rule-alert.issue-vacation-eve {
+  background: #7650b7;
+  color: #fff;
+}
+
+.rule-alert.issue-fixed-regime {
+  background: #d47b13;
+  color: #fff;
+}
+
+.rule-alert.issue-capacity {
+  background: #b83280;
+  color: #fff;
 }
 
 .card-remove {
@@ -915,6 +956,85 @@ button {
 
 .restriction-item.is-editing {
   grid-template-columns: 1fr;
+}
+
+.restriction-item.has-vacation-issues {
+  border-left-width: 5px;
+}
+
+.restriction-item.vacation-issue-weekend {
+  border-left-color: #7650b7;
+}
+
+.restriction-item.vacation-issue-weekly-rest {
+  border-left-color: #d47b13;
+}
+
+.restriction-item.vacation-issue-holiday {
+  border-left-color: #c83f4d;
+}
+
+.restriction-item.vacation-issue-before-holiday {
+  border-left-color: #c65d1e;
+}
+
+.restriction-item.vacation-issue-short-period {
+  border-left-color: #2d6cdf;
+}
+
+.restriction-item.vacation-issue-too-many-periods {
+  border-left-color: #b83280;
+}
+
+.restriction-item.vacation-issue-missing-long-period {
+  border-left-color: #0f766e;
+}
+
+.vacation-rule-warnings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.vacation-rule-warning {
+  display: inline-block;
+  max-width: 100%;
+  padding: 4px 7px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.vacation-rule-warning.issue-weekend {
+  color: #7650b7;
+}
+
+.vacation-rule-warning.issue-weekly-rest {
+  color: #9a5709;
+}
+
+.vacation-rule-warning.issue-holiday {
+  color: #b52e3d;
+}
+
+.vacation-rule-warning.issue-before-holiday {
+  color: #a84912;
+}
+
+.vacation-rule-warning.issue-short-period {
+  color: #245ab8;
+}
+
+.vacation-rule-warning.issue-too-many-periods {
+  color: #9b2469;
+}
+
+.vacation-rule-warning.issue-missing-long-period {
+  color: #0f766e;
 }
 
 .restriction-edit-grid {
