@@ -53,6 +53,7 @@ let draggedSourceShift = null;
 let reviewMode = true;
 let editingRestrictionId = null;
 let restrictionFilterValue = "active";
+let rotationStartMonth = monthKey();
 
 const els = {
   tabs: document.querySelectorAll(".tab-button"),
@@ -84,6 +85,8 @@ const els = {
   personName: document.getElementById("person-name"),
   personShift: document.getElementById("person-shift"),
   peopleList: document.getElementById("people-list"),
+  rotationStartMonth: document.getElementById("rotation-start-month"),
+  rotationList: document.getElementById("rotation-list"),
   restrictionForm: document.getElementById("restriction-form"),
   restrictionPeople: document.getElementById("restriction-people"),
   restrictionType: document.getElementById("restriction-type"),
@@ -518,6 +521,18 @@ function monthKey(date = currentDate) {
   return date.toISOString().slice(0, 7);
 }
 
+function addMonthsKey(key, amount) {
+  const [year, month] = key.split("-").map(Number);
+  const date = new Date(year, month - 1 + amount, 1, 12);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function formattedMonth(key) {
+  const [year, month] = key.split("-").map(Number);
+  const label = new Date(year, month - 1, 1, 12).toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
 function getPersonShift(person, key = monthKey()) {
   return state.monthlyShifts?.[key]?.[person.id] || person.baseShift;
 }
@@ -542,12 +557,52 @@ function scheduleColumnForRegime(shift) {
 function setPersonShift(personId, shift, key = monthKey()) {
   if (!state.monthlyShifts[key]) state.monthlyShifts[key] = {};
   state.monthlyShifts[key][personId] = shift;
-  getMonthKeys().forEach((dayKey) => {
+  Object.keys(state.assignments).filter((dayKey) => dayKey.startsWith(`${key}-`)).forEach((dayKey) => {
     if (shift === "Comercial Fixo") {
       removePersonFromDay(personId, dayKey, "24x72");
       removePersonFromDay(personId, dayKey, "12x36");
     }
   });
+}
+
+function peopleIn12x36Month(key) {
+  return state.people.filter((person) => getPersonShift(person, key) === "12x36");
+}
+
+function adjacent12x36Months(personId, key) {
+  return [-1, 1]
+    .map((offset) => addMonthsKey(key, offset))
+    .filter((adjacentKey) => peopleIn12x36Month(adjacentKey).some((person) => person.id === personId));
+}
+
+function previous12x36Month(personId, key) {
+  const previousKey = addMonthsKey(key, -1);
+  return peopleIn12x36Month(previousKey).some((person) => person.id === personId) ? previousKey : null;
+}
+
+function rotationReturnShift(person, key) {
+  for (let offset = 1; offset <= 24; offset += 1) {
+    const previousShift = getPersonShift(person, addMonthsKey(key, -offset));
+    if (previousShift !== "12x36") return previousShift;
+  }
+  return person.baseShift === "12x36" ? "24x72" : person.baseShift;
+}
+
+function removePersonFrom12x36Month(personId, key) {
+  const person = findPerson(personId);
+  if (!person || getPersonShift(person, key) !== "12x36") return;
+  const returnShift = rotationReturnShift(person, key);
+  if (returnShift === person.baseShift) {
+    delete state.monthlyShifts?.[key]?.[personId];
+    if (state.monthlyShifts?.[key] && !Object.keys(state.monthlyShifts[key]).length) delete state.monthlyShifts[key];
+    return;
+  }
+  setPersonShift(personId, returnShift, key);
+}
+
+function alertConsecutive12x36(person, key, conflicts = adjacent12x36Months(person.id, key)) {
+  const months = conflicts.map(formattedMonth).join(" e ");
+  alert(`${person.name} já está no 12x36 em ${months}. Não é permitido repetir a mesma pessoa em meses consecutivos.`);
 }
 
 function shiftClass(shift) {
@@ -899,6 +954,15 @@ function cardRuleIssues(person, key, shift) {
   }
   if (personShift === "Comercial Fixo" && shift !== "Comercial") {
     issues.push({ category: "fixed-regime", message: "Comercial Fixo deve ficar apenas na coluna Comercial." });
+  }
+  const previousRotationMonth = shift === "12x36" && personShift === "12x36"
+    ? previous12x36Month(person.id, key.slice(0, 7))
+    : null;
+  if (previousRotationMonth) {
+    issues.push({
+      category: "rotation-repeat",
+      message: `Rodízio repetido: pessoa também estava no 12x36 em ${formattedMonth(previousRotationMonth)}.`,
+    });
   }
   if (shift === "24x72" && getAssignments(key)["24x72"].length > 2) {
     issues.push({ category: "capacity", message: "24x72 está com mais de 2 plantonistas neste dia." });
@@ -1443,6 +1507,11 @@ function firstAvailableKeyNextMonth(person) {
 
 function validateCurrentSchedule() {
   const monthKeys = getMonthKeys();
+  const currentMonthKey = monthKey();
+  const current12x36People = peopleIn12x36Month(currentMonthKey);
+  const repeated12x36 = current12x36People
+    .map((person) => ({ person, previousKey: previous12x36Month(person.id, currentMonthKey) }))
+    .filter(({ previousKey }) => previousKey);
   const vacationEveConflicts = monthKeys.flatMap((key) => {
     return getAssignments(key)["24x72"]
       .filter((personId) => !isEmptySlot(personId) && isDayBeforeVacation(personId, key))
@@ -1476,6 +1545,15 @@ function validateCurrentSchedule() {
     .sort((a, b) => a.person.name.localeCompare(b.person.name));
 
   const sections = [];
+  if (!current12x36People.length) {
+    sections.push("Planejamento 12x36: nenhum plantonista definido para este mês.");
+  } else if (repeated12x36.length) {
+    sections.push(`Rodízio 12x36 repetido em meses consecutivos:\n${repeated12x36
+      .map(({ person, previousKey }) => `• ${person.name}: ${formattedMonth(previousKey)} e ${formattedMonth(currentMonthKey)}`)
+      .join("\n")}`);
+  } else {
+    sections.push("Rodízio 12x36: nenhuma repetição em relação ao mês anterior.");
+  }
   if (vacationEveConflicts.length) {
     sections.push(`Escalas 24x72 na véspera das férias:\n${vacationEveConflicts.map(({ person, key }) => `• ${person.name}: ${formatDate(key)}`).join("\n")}`);
   } else {
@@ -2930,6 +3008,58 @@ function renderStats() {
   ].join("");
 }
 
+function render12x36RotationPlanner() {
+  if (!els.rotationList || !els.rotationStartMonth) return;
+  els.rotationStartMonth.value = rotationStartMonth;
+  const keys = Array.from({ length: 12 }, (_, index) => addMonthsKey(rotationStartMonth, index));
+
+  els.rotationList.innerHTML = keys.map((key) => {
+    const selectedPeople = peopleIn12x36Month(key).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+    const selectedIds = new Set(selectedPeople.map((person) => person.id));
+    const repeatedPeople = selectedPeople.filter((person) => adjacent12x36Months(person.id, key).length);
+    const chips = selectedPeople.length
+      ? selectedPeople.map((person) => {
+        const conflicts = adjacent12x36Months(person.id, key);
+        const warning = conflicts.length
+          ? `Repete o 12x36 em ${conflicts.map(formattedMonth).join(" e ")}.`
+          : "Retirar do 12x36 neste mês";
+        return `
+          <span class="rotation-person ${conflicts.length ? "has-conflict" : ""}" title="${escapeHtmlValue(warning)}">
+            ${escapeHtmlValue(person.name)}
+            ${conflicts.length ? '<b aria-label="Repetição consecutiva">!</b>' : ""}
+            <button type="button" data-remove-rotation-person="${person.id}" data-rotation-month="${key}" title="Retirar do 12x36">×</button>
+          </span>`;
+      }).join("")
+      : '<span class="rotation-empty">Sem plantonista definido</span>';
+
+    const candidateOptions = state.people
+      .filter((person) => !selectedIds.has(person.id))
+      .filter((person) => getPersonShift(person, key) !== "Comercial Fixo")
+      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"))
+      .map((person) => {
+        const conflicts = adjacent12x36Months(person.id, key);
+        const suffix = conflicts.length ? ` (já está em ${conflicts.map(formattedMonth).join(" e ")})` : "";
+        return `<option value="${person.id}" ${conflicts.length ? "disabled" : ""}>${escapeHtmlValue(person.name)}${escapeHtmlValue(suffix)}</option>`;
+      }).join("");
+
+    return `
+      <article class="rotation-row ${selectedPeople.length ? "" : "is-empty"} ${repeatedPeople.length ? "has-conflict" : ""}">
+        <div class="rotation-month">
+          <strong>${formattedMonth(key)}</strong>
+          ${repeatedPeople.length ? '<span title="Há pessoa repetida em mês consecutivo">Revisar rodízio</span>' : ""}
+        </div>
+        <div class="rotation-people">${chips}</div>
+        <label class="rotation-add">
+          <span>Adicionar</span>
+          <select data-add-rotation-month="${key}">
+            <option value="">Selecionar pessoa</option>
+            ${candidateOptions}
+          </select>
+        </label>
+      </article>`;
+  }).join("");
+}
+
 function renderPeople() {
   els.peopleList.innerHTML = "";
   els.restrictionPeople.innerHTML = "";
@@ -2960,6 +3090,7 @@ function renderPeople() {
     els.peopleList.innerHTML = '<div class="empty-state">Cadastre a primeira pessoa da equipe.</div>';
     els.restrictionPeople.innerHTML = '<span class="empty-state">Cadastre pessoas na aba Equipe.</span>';
   }
+  render12x36RotationPlanner();
 }
 
 function overlappingRestrictions(personIds, start, end, ignoredRestrictionId = null) {
@@ -3384,6 +3515,7 @@ els.peopleList.addEventListener("click", (event) => {
     removePersonFromDay(id, key);
   });
   state.restrictions = state.restrictions.filter((restriction) => restriction.personId !== id);
+  Object.values(state.monthlyShifts).forEach((shifts) => delete shifts[id]);
   saveState();
   renderAll();
 });
@@ -3391,7 +3523,46 @@ els.peopleList.addEventListener("click", (event) => {
 els.peopleList.addEventListener("change", (event) => {
   const id = event.target.dataset.shiftPerson;
   if (!id) return;
+  const person = findPerson(id);
+  const conflicts = event.target.value === "12x36" && person ? adjacent12x36Months(id, monthKey()) : [];
+  if (conflicts.length) {
+    alertConsecutive12x36(person, monthKey(), conflicts);
+    renderPeople();
+    return;
+  }
   setPersonShift(id, event.target.value);
+  saveState();
+  renderAll();
+});
+
+els.rotationStartMonth?.addEventListener("change", (event) => {
+  if (!/^\d{4}-\d{2}$/.test(event.target.value)) return;
+  rotationStartMonth = event.target.value;
+  render12x36RotationPlanner();
+});
+
+els.rotationList?.addEventListener("change", (event) => {
+  const key = event.target.dataset.addRotationMonth;
+  const personId = event.target.value;
+  if (!key || !personId) return;
+  const person = findPerson(personId);
+  if (!person) return;
+  const conflicts = adjacent12x36Months(personId, key);
+  if (conflicts.length) {
+    alertConsecutive12x36(person, key, conflicts);
+    render12x36RotationPlanner();
+    return;
+  }
+  setPersonShift(personId, "12x36", key);
+  saveState();
+  renderAll();
+});
+
+els.rotationList?.addEventListener("click", (event) => {
+  const personId = event.target.dataset.removeRotationPerson;
+  const key = event.target.dataset.rotationMonth;
+  if (!personId || !key) return;
+  removePersonFrom12x36Month(personId, key);
   saveState();
   renderAll();
 });
