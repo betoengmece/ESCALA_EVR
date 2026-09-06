@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Escala EVR</title>
-    <link rel="stylesheet" href="styles.css?v=20260905-1" />
+    <link rel="stylesheet" href="styles.css?v=20260905-2" />
   </head>
   <body>
     <div class="app-shell">
@@ -122,12 +122,20 @@
 
           <div class="restriction-toolbar">
             <p>Por padrão aparecem só restrições ativas ou futuras. Use o filtro para abrir restrições anteriores.</p>
-            <label>
-              Mostrar restrições
-              <select id="restriction-filter">
-                <option value="active">Ativas e futuras</option>
-              </select>
-            </label>
+            <div class="restriction-filter-controls">
+              <label>
+                Mostrar restrições
+                <select id="restriction-filter">
+                  <option value="active">Ativas e futuras</option>
+                </select>
+              </label>
+              <label>
+                Servidor
+                <select id="restriction-person-filter">
+                  <option value="all">Todos</option>
+                </select>
+              </label>
+            </div>
           </div>
 
           <div id="vacation-check" class="vacation-check"></div>
@@ -195,6 +203,6 @@
 
     <script src="legacy-data.js"></script>
     <script src="initial-state.js"></script>
-    <script src="app.js?v=20260905-1"></script>
+    <script src="app.js?v=20260905-2"></script>
   </body>
 </html>

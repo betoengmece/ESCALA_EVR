@@ -53,6 +53,7 @@ let draggedSourceShift = null;
 let reviewMode = true;
 let editingRestrictionId = null;
 let restrictionFilterValue = "active";
+let restrictionPersonFilterValue = "all";
 let rotationStartMonth = monthKey();
 
 const els = {
@@ -94,6 +95,7 @@ const els = {
   restrictionEnd: document.getElementById("restriction-end"),
   restrictionNote: document.getElementById("restriction-note"),
   restrictionFilter: document.getElementById("restriction-filter"),
+  restrictionPersonFilter: document.getElementById("restriction-person-filter"),
   vacationCheck: document.getElementById("vacation-check"),
   restrictionList: document.getElementById("restriction-list"),
   holidayForm: document.getElementById("holiday-form"),
@@ -3254,9 +3256,24 @@ function renderRestrictionFilter() {
     <option value="current" ${currentValue === "current" ? "selected" : ""}>Mês selecionado (${monthLabel(currentMonth)})</option>
     ${monthOptions}
   `;
+
+  if (!els.restrictionPersonFilter) return;
+  if (restrictionPersonFilterValue !== "all" && !findPerson(restrictionPersonFilterValue)) {
+    restrictionPersonFilterValue = "all";
+  }
+  const personOptions = state.people
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"))
+    .map((person) => `<option value="${person.id}" ${restrictionPersonFilterValue === person.id ? "selected" : ""}>${escapeHtmlValue(person.name)}</option>`)
+    .join("");
+  els.restrictionPersonFilter.innerHTML = `
+    <option value="all" ${restrictionPersonFilterValue === "all" ? "selected" : ""}>Todos os servidores</option>
+    ${personOptions}
+  `;
 }
 
 function restrictionMatchesFilter(restriction) {
+  if (restrictionPersonFilterValue !== "all" && restriction.personId !== restrictionPersonFilterValue) return false;
   if (restrictionFilterValue === "active") return restriction.end >= dateKey(new Date());
   if (restrictionFilterValue === "all") return true;
   const filterMonth = restrictionFilterValue === "current" ? monthKey() : restrictionFilterValue;
@@ -3279,6 +3296,45 @@ function renderVacationCheck() {
   const people = state.people.slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   if (!people.length) {
     els.vacationCheck.innerHTML = "";
+    return;
+  }
+
+  if (restrictionPersonFilterValue !== "all") {
+    const person = findPerson(restrictionPersonFilterValue);
+    const vacations = state.restrictions
+      .filter((restriction) => restriction.personId === restrictionPersonFilterValue && isVacationRestriction(restriction))
+      .sort((a, b) => a.start.localeCompare(b.start));
+    const vacationsByYear = vacations.reduce((groups, restriction) => {
+      const vacationYear = restriction.start.slice(0, 4);
+      if (!groups[vacationYear]) groups[vacationYear] = [];
+      groups[vacationYear].push(restriction);
+      return groups;
+    }, {});
+    const composition = Object.entries(vacationsByYear)
+      .sort(([yearA], [yearB]) => yearB.localeCompare(yearA))
+      .map(([vacationYear, periods]) => {
+        const totalDays = periods.reduce((total, restriction) => total + vacationPeriodDays(restriction), 0);
+        return `
+          <div class="vacation-composition-year">
+            <strong>${vacationYear}: ${totalDays} dia(s) em ${periods.length} período(s)</strong>
+            <div class="vacation-period-list">
+              ${periods.map((restriction) => `
+                <span title="${escapeHtmlValue(restriction.note || "Férias")}">
+                  ${formatDate(restriction.start)} a ${formatDate(restriction.end)}
+                  <b>${vacationPeriodDays(restriction)} dias</b>
+                </span>`).join("")}
+            </div>
+          </div>`;
+      }).join("");
+
+    els.vacationCheck.className = `vacation-check person-vacation-check ${vacations.length ? "is-complete" : "has-missing"}`;
+    els.vacationCheck.innerHTML = `
+      <div class="vacation-person-head">
+        <strong>Férias de ${escapeHtmlValue(person?.name || "Servidor")}</strong>
+        <span>${vacations.length ? `${vacations.length} período(s) cadastrado(s)` : "Nenhum período de férias cadastrado"}</span>
+      </div>
+      ${composition ? `<div class="vacation-composition">${composition}</div>` : ""}
+    `;
     return;
   }
 
@@ -3411,8 +3467,9 @@ function renderRestrictions() {
   });
 
   if (!filteredRestrictions.length) {
+    const selectedPerson = restrictionPersonFilterValue === "all" ? null : findPerson(restrictionPersonFilterValue);
     els.restrictionList.innerHTML = state.restrictions.length
-      ? '<div class="empty-state">Nenhuma restrição ativa ou futura neste filtro. Para ver histórico, altere o filtro para Tudo ou escolha um mês anterior.</div>'
+      ? `<div class="empty-state">Nenhuma restrição encontrada${selectedPerson ? ` para ${escapeHtmlValue(selectedPerson.name)}` : ""} neste filtro.</div>`
       : '<div class="empty-state">Nenhuma restrição cadastrada.</div>';
   }
 
@@ -3606,6 +3663,13 @@ els.restrictionForm.addEventListener("submit", (event) => {
 
 els.restrictionFilter?.addEventListener("change", (event) => {
   restrictionFilterValue = event.target.value;
+  editingRestrictionId = null;
+  renderRestrictions();
+});
+
+els.restrictionPersonFilter?.addEventListener("change", (event) => {
+  restrictionPersonFilterValue = event.target.value;
+  if (restrictionPersonFilterValue !== "all") restrictionFilterValue = "all";
   editingRestrictionId = null;
   renderRestrictions();
 });
