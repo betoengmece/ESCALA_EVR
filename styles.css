@@ -418,9 +418,112 @@ button {
   color: #ff9da4;
 }
 
+body.sync-pending::before {
+  content: "";
+  position: fixed;
+  z-index: 1000;
+  inset: 0 0 auto;
+  height: 6px;
+  background: #f4c84f;
+  box-shadow: 0 2px 8px rgba(115, 78, 0, 0.32);
+  pointer-events: none;
+}
+
+body.sync-pending .sync-box {
+  border-color: #f4c84f;
+  background: #f4c84f;
+  box-shadow: 0 0 0 2px rgba(244, 200, 79, 0.2);
+}
+
+body.sync-pending .sync-status {
+  color: #372b0a;
+  font-weight: 800;
+}
+
+body.sync-pending .sync-box .secondary-action {
+  background: rgba(55, 43, 10, 0.82);
+  color: #fff;
+}
+
+.sync-password-modal {
+  position: fixed;
+  z-index: 1200;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(18, 31, 42, 0.68);
+}
+
+.sync-password-modal[hidden] {
+  display: none;
+}
+
+.sync-password-dialog {
+  width: min(420px, 100%);
+  padding: 22px;
+  border: 1px solid #d7e0e6;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(18, 31, 42, 0.28);
+}
+
+.sync-password-dialog h2,
+.sync-password-dialog p {
+  margin: 0;
+}
+
+.sync-password-dialog > div > p:last-child {
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.sync-password-dialog form,
+.sync-password-dialog label {
+  display: grid;
+  gap: 7px;
+}
+
+.sync-password-dialog form {
+  margin-top: 18px;
+}
+
+.sync-password-dialog input {
+  width: 100%;
+}
+
+.sync-password-error {
+  min-height: 18px;
+  color: #b52e3d;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.sync-password-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.sync-password-actions button {
+  width: auto;
+  margin: 0;
+}
+
+.dialog-secondary {
+  border: 1px solid #cbd6dd;
+  background: #eef2f4;
+  color: var(--text);
+}
+
 .main {
   padding: 24px;
   overflow: auto;
+  transition: background-color 160ms ease;
+}
+
+body.sync-pending .main {
+  background: #fff8dc;
 }
 
 .tab-page {
@@ -1213,6 +1316,10 @@ button {
   border-left-color: #0f766e;
 }
 
+.restriction-item.vacation-issue-total-days {
+  border-left-color: #d49a16;
+}
+
 .vacation-rule-warnings {
   display: flex;
   flex-wrap: wrap;
@@ -1258,6 +1365,12 @@ button {
 
 .vacation-rule-warning.issue-missing-long-period {
   color: #0f766e;
+}
+
+.vacation-rule-warning.issue-total-days {
+  border-color: #e9c66d;
+  background: #fff4cf;
+  color: #765400;
 }
 
 .restriction-edit-grid {

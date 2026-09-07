@@ -2,6 +2,7 @@ const STORAGE_KEY = "escala-evr-v1";
 const UNDO_STORAGE_KEY = "escala-evr-undo-v1";
 const SYNC_META_KEY = "escala-evr-sync-meta-v1";
 const SYNC_ENDPOINT = "https://script.google.com/macros/s/AKfycbwBO_8h__5F1PpugzjocJn9DSzOJD50K7EQ3OSRf6zYoKscaFzRV-itFSS9lQhEw3w5mg/exec";
+const SYNC_PASSWORD = "EVR 2026";
 const UNDO_LIMIT = 100;
 const UNDO_MAX_BYTES = 1800000;
 const SHIFT_HOURS = {
@@ -55,6 +56,7 @@ let editingRestrictionId = null;
 let restrictionFilterValue = "active";
 let restrictionPersonFilterValue = "all";
 let rotationStartMonth = monthKey();
+let pendingSyncForce = false;
 
 const els = {
   tabs: document.querySelectorAll(".tab-button"),
@@ -76,6 +78,11 @@ const els = {
   syncStatus: document.getElementById("sync-status"),
   syncPull: document.getElementById("sync-pull"),
   syncPush: document.getElementById("sync-push"),
+  syncPasswordModal: document.getElementById("sync-password-modal"),
+  syncPasswordForm: document.getElementById("sync-password-form"),
+  syncPassword: document.getElementById("sync-password"),
+  syncPasswordError: document.getElementById("sync-password-error"),
+  syncPasswordCancel: document.getElementById("sync-password-cancel"),
   restoreLegacy: document.getElementById("restore-legacy"),
   importFile: document.getElementById("import-file"),
   checkScale: document.getElementById("check-scale"),
@@ -2635,6 +2642,7 @@ function syncDateLabel(value) {
 
 function updateSyncStatus(message = null, tone = "") {
   if (!els.syncStatus) return;
+  document.body.classList.toggle("sync-pending", syncMeta.dirty || !syncMeta.version);
   els.syncStatus.className = tone ? `sync-status ${tone}` : "sync-status";
   if (message) {
     els.syncStatus.textContent = message;
@@ -2729,7 +2737,29 @@ async function pullFromCloud() {
   }
 }
 
-async function pushToCloud(force = false) {
+function closeSyncPasswordDialog() {
+  if (!els.syncPasswordModal) return;
+  els.syncPasswordModal.hidden = true;
+  els.syncPasswordForm?.reset();
+  if (els.syncPasswordError) els.syncPasswordError.textContent = "";
+  pendingSyncForce = false;
+}
+
+function openSyncPasswordDialog(force = false) {
+  if (!els.syncPasswordModal) return;
+  pendingSyncForce = force;
+  els.syncPasswordForm?.reset();
+  if (els.syncPasswordError) els.syncPasswordError.textContent = "";
+  els.syncPasswordModal.hidden = false;
+  requestAnimationFrame(() => els.syncPassword?.focus());
+}
+
+async function pushToCloud(force = false, authorized = false) {
+  if (!authorized) {
+    openSyncPasswordDialog(force);
+    return;
+  }
+
   try {
     setSyncBusy(true);
     updateSyncStatus("Nuvem: enviando...", "busy");
@@ -2749,7 +2779,7 @@ async function pushToCloud(force = false) {
       setSyncBusy(false);
       updateSyncStatus(`Nuvem: conflito v${data.currentVersion}`, "error");
       if (confirm("Existe uma versão mais nova na nuvem. Deseja sobrescrever mesmo assim com esta escala local?")) {
-        await pushToCloud(true);
+        await pushToCloud(true, true);
       }
       return;
     }
@@ -3120,49 +3150,6 @@ function vacationPeriodDays(restriction) {
 function vacationRuleIssues(restriction, ignoredRestrictionId = null) {
   if (!isVacationRestriction(restriction) || !restriction.start || !restriction.end) return [];
   const issues = [];
-  const startDate = new Date(`${restriction.start}T12:00:00`);
-  const weekday = startDate.getDay();
-  const weekdayName = startDate.toLocaleDateString("pt-BR", { weekday: "long" });
-
-  if (weekday === 0 || weekday === 6) {
-    issues.push({
-      category: "weekend",
-      message: `As férias começam em ${weekdayName}. O início deve ocorrer em dia útil, sem coincidir com o repouso semanal.`,
-    });
-  } else if (weekday === 5) {
-    issues.push({
-      category: "weekly-rest",
-      message: "As férias começam na sexta-feira, dentro dos dois dias que antecedem o repouso semanal usual de domingo.",
-    });
-  }
-
-  const holidayOnStart = state.holidays.find((holiday) => holiday.date === restriction.start);
-  if (holidayOnStart) {
-    issues.push({
-      category: "holiday",
-      message: `As férias começam no feriado “${holidayOnStart.name}”.`,
-    });
-  }
-
-  for (let offset = 1; offset <= 2; offset += 1) {
-    const holidayKey = addDaysKey(restriction.start, offset);
-    const holiday = state.holidays.find((item) => item.date === holidayKey);
-    if (holiday) {
-      issues.push({
-        category: "before-holiday",
-        message: `As férias começam ${offset} dia(s) antes do feriado “${holiday.name}” (${formatDate(holiday.date)}).`,
-      });
-    }
-  }
-
-  const periodDays = vacationPeriodDays(restriction);
-  if (periodDays < 5) {
-    issues.push({
-      category: "short-period",
-      message: `O período tem ${periodDays} dia(s). Um período fracionado de férias não pode ter menos de 5 dias corridos.`,
-    });
-  }
-
   const year = restriction.start.slice(0, 4);
   const yearStart = `${year}-01-01`;
   const yearEnd = `${year}-12-31`;
@@ -3170,18 +3157,43 @@ function vacationRuleIssues(restriction, ignoredRestrictionId = null) {
     .filter((item) => item.id !== ignoredRestrictionId)
     .filter((item) => item.personId === restriction.personId && isVacationRestriction(item))
     .filter((item) => item.start <= yearEnd && item.end >= yearStart)
-    .concat(restriction);
+    .concat(restriction)
+    .sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end));
+  const firstPeriod = periods[0];
+  const isFirstPeriod = firstPeriod === restriction || firstPeriod.id === restriction.id;
+
+  if (isFirstPeriod) {
+    const startDate = new Date(`${restriction.start}T12:00:00`);
+    const weekday = startDate.getDay();
+    const weekdayName = startDate.toLocaleDateString("pt-BR", { weekday: "long" });
+    if (weekday === 0 || weekday === 6) {
+      issues.push({
+        category: "weekend",
+        message: `O primeiro período de férias começa em ${weekdayName}. Ele não deve começar no sábado ou domingo.`,
+      });
+    } else if (weekday === 5) {
+      issues.push({
+        category: "weekly-rest",
+        message: "O primeiro período de férias começa na sexta-feira. Ele deve começar entre segunda e quinta-feira.",
+      });
+    }
+  }
 
   if (periods.length > 3) {
     issues.push({
       category: "too-many-periods",
-      message: `Há ${periods.length} períodos de férias em ${year}. A regra geral permite no máximo 3 períodos.`,
+      message: `Há ${periods.length} períodos de férias em ${year}. O limite definido é de 3 períodos.`,
     });
-  } else if (periods.length === 3 && !periods.some((item) => vacationPeriodDays(item) >= 14)) {
-    issues.push({
-      category: "missing-long-period",
-      message: "Nos 3 períodos cadastrados, nenhum possui ao menos 14 dias corridos.",
-    });
+  }
+
+  if (isFirstPeriod) {
+    const totalDays = periods.reduce((total, item) => total + vacationPeriodDays(item), 0);
+    if (totalDays !== 30) {
+      issues.push({
+        category: "total-days",
+        message: `Os ${periods.length} período(s) de férias de ${year} totalizam ${totalDays} dia(s), em vez de 30.`,
+      });
+    }
   }
 
   return issues;
@@ -3202,7 +3214,7 @@ function confirmVacationRuleIssues(restrictions, ignoredRestrictionId = null) {
   });
   const uniqueLines = [...new Set(lines)];
   if (!uniqueLines.length) return true;
-  return confirm(`Atenção às regras usuais de férias (art. 134, §§ 1º e 3º da CLT):\n\n${uniqueLines.join("\n")}\n\nDeseja salvar mesmo assim?`);
+  return confirm(`Atenção aos critérios de férias configurados na Escala EVR:\n\n${uniqueLines.join("\n")}\n\nDeseja salvar mesmo assim?`);
 }
 
 function restrictionTypeOptions(selectedType) {
@@ -3546,6 +3558,24 @@ els.importData.addEventListener("click", () => els.importFile.click());
 els.importFile.addEventListener("change", (event) => importBackupFile(event.target.files[0]));
 els.syncPull?.addEventListener("click", pullFromCloud);
 els.syncPush?.addEventListener("click", () => pushToCloud(false));
+els.syncPasswordCancel?.addEventListener("click", closeSyncPasswordDialog);
+els.syncPasswordModal?.addEventListener("click", (event) => {
+  if (event.target === els.syncPasswordModal) closeSyncPasswordDialog();
+});
+els.syncPasswordForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (els.syncPassword.value !== SYNC_PASSWORD) {
+    els.syncPasswordError.textContent = "Senha incorreta. Confira e tente novamente.";
+    els.syncPassword.select();
+    return;
+  }
+  const force = pendingSyncForce;
+  closeSyncPasswordDialog();
+  pushToCloud(force, true);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !els.syncPasswordModal?.hidden) closeSyncPasswordDialog();
+});
 els.restoreLegacy?.addEventListener("click", restoreLegacyCsvData);
 els.clearMonth.addEventListener("click", clearCurrentMonth);
 

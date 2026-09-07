@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Escala EVR</title>
-    <link rel="stylesheet" href="styles.css?v=20260905-2" />
+    <link rel="stylesheet" href="styles.css?v=20260907-2" />
   </head>
   <body>
     <div class="app-shell">
@@ -201,8 +201,29 @@
       </main>
     </div>
 
+    <div id="sync-password-modal" class="sync-password-modal" hidden>
+      <section class="sync-password-dialog" role="dialog" aria-modal="true" aria-labelledby="sync-password-title">
+        <div>
+          <p class="eyebrow">Proteção do envio</p>
+          <h2 id="sync-password-title">Enviar para a nuvem</h2>
+          <p>Digite a senha para confirmar o envio desta escala.</p>
+        </div>
+        <form id="sync-password-form">
+          <label>
+            Senha
+            <input id="sync-password" type="password" autocomplete="off" required />
+          </label>
+          <p id="sync-password-error" class="sync-password-error" role="alert"></p>
+          <div class="sync-password-actions">
+            <button id="sync-password-cancel" class="dialog-secondary" type="button">Cancelar</button>
+            <button class="primary-action" type="submit">Confirmar envio</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
     <script src="legacy-data.js"></script>
     <script src="initial-state.js"></script>
-    <script src="app.js?v=20260905-2"></script>
+    <script src="app.js?v=20260907-2"></script>
   </body>
 </html>
