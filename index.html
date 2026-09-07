@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Escala EVR</title>
-    <link rel="stylesheet" href="styles.css?v=20260907-2" />
+    <link rel="stylesheet" href="styles.css?v=20260907-3" />
   </head>
   <body>
     <div class="app-shell">
@@ -104,6 +104,19 @@
                 <option>Atestado</option>
                 <option>Outro impedimento</option>
               </select>
+            </label>
+            <label class="vacation-metadata-field">
+              Período das férias
+              <select id="restriction-vacation-period">
+                <option value="">Selecione</option>
+                <option value="1">1º período</option>
+                <option value="2">2º período</option>
+                <option value="3">3º período</option>
+              </select>
+            </label>
+            <label class="vacation-metadata-field">
+              Ano de competência
+              <input id="restriction-vacation-year" type="number" inputmode="numeric" min="2000" max="2100" placeholder="Ex.: 2026" />
             </label>
             <label>
               Início
@@ -224,6 +237,6 @@
 
     <script src="legacy-data.js"></script>
     <script src="initial-state.js"></script>
-    <script src="app.js?v=20260907-2"></script>
+    <script src="app.js?v=20260907-3"></script>
   </body>
 </html>

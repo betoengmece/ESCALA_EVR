@@ -98,6 +98,8 @@ const els = {
   restrictionForm: document.getElementById("restriction-form"),
   restrictionPeople: document.getElementById("restriction-people"),
   restrictionType: document.getElementById("restriction-type"),
+  restrictionVacationPeriod: document.getElementById("restriction-vacation-period"),
+  restrictionVacationYear: document.getElementById("restriction-vacation-year"),
   restrictionStart: document.getElementById("restriction-start"),
   restrictionEnd: document.getElementById("restriction-end"),
   restrictionNote: document.getElementById("restriction-note"),
@@ -324,6 +326,8 @@ function normalizeLoadedState(value) {
     ...restriction,
     start: normalizeDateKey(restriction.start),
     end: normalizeDateKey(restriction.end),
+    vacationPeriod: [1, 2, 3].includes(Number(restriction.vacationPeriod)) ? Number(restriction.vacationPeriod) : null,
+    vacationYear: /^\d{4}$/.test(String(restriction.vacationYear || "")) ? Number(restriction.vacationYear) : null,
   }));
   loaded.holidays = loaded.holidays.map((holiday) => ({
     ...holiday,
@@ -348,6 +352,12 @@ function assertValidLoadedState(loaded) {
   (loaded.restrictions || []).forEach((restriction) => {
     if (!datePattern.test(restriction.start) || !datePattern.test(restriction.end)) {
       throw new Error(`Data inválida em restrição: ${restriction.start || "sem início"} até ${restriction.end || "sem fim"}`);
+    }
+    if (restriction.vacationPeriod != null && ![1, 2, 3].includes(Number(restriction.vacationPeriod))) {
+      throw new Error("Período de férias inválido.");
+    }
+    if (restriction.vacationYear != null && !/^\d{4}$/.test(String(restriction.vacationYear))) {
+      throw new Error("Ano de competência das férias inválido.");
     }
   });
   (loaded.holidays || []).forEach((holiday) => {
@@ -3147,22 +3157,51 @@ function vacationPeriodDays(restriction) {
   return dayDistance(restriction.start, addDaysKey(restriction.end, 1));
 }
 
+function vacationPeriodNumber(restriction) {
+  const period = Number(restriction?.vacationPeriod);
+  return [1, 2, 3].includes(period) ? period : null;
+}
+
+function vacationCompetenceYear(restriction) {
+  const year = Number(restriction?.vacationYear);
+  return Number.isInteger(year) && year >= 2000 && year <= 2100 ? year : null;
+}
+
+function vacationPeriodName(restriction) {
+  const period = vacationPeriodNumber(restriction);
+  return period ? `${period}º período` : "Período não informado";
+}
+
+function vacationMetadataText(restriction) {
+  if (!isVacationRestriction(restriction)) return "";
+  const year = vacationCompetenceYear(restriction);
+  return `${vacationPeriodName(restriction)} · competência ${year || "não informada"}`;
+}
+
 function vacationRuleIssues(restriction, ignoredRestrictionId = null) {
   if (!isVacationRestriction(restriction) || !restriction.start || !restriction.end) return [];
   const issues = [];
-  const year = restriction.start.slice(0, 4);
-  const yearStart = `${year}-01-01`;
-  const yearEnd = `${year}-12-31`;
+  const period = vacationPeriodNumber(restriction);
+  const competenceYear = vacationCompetenceYear(restriction);
+
+  if (!period || !competenceYear) {
+    const missing = [!period ? "o período" : "", !competenceYear ? "o ano de competência" : ""].filter(Boolean).join(" e ");
+    issues.push({
+      category: "missing-metadata",
+      message: `Informe ${missing} destas férias.`,
+    });
+    return issues;
+  }
+
   const periods = state.restrictions
     .filter((item) => item.id !== ignoredRestrictionId)
     .filter((item) => item.personId === restriction.personId && isVacationRestriction(item))
-    .filter((item) => item.start <= yearEnd && item.end >= yearStart)
+    .filter((item) => vacationCompetenceYear(item) === competenceYear)
     .concat(restriction)
-    .sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end));
-  const firstPeriod = periods[0];
-  const isFirstPeriod = firstPeriod === restriction || firstPeriod.id === restriction.id;
+    .sort((a, b) => (vacationPeriodNumber(a) || 99) - (vacationPeriodNumber(b) || 99) || a.start.localeCompare(b.start));
+  const duplicatePeriodCount = periods.filter((item) => vacationPeriodNumber(item) === period).length;
 
-  if (isFirstPeriod) {
+  if (period === 1) {
     const startDate = new Date(`${restriction.start}T12:00:00`);
     const weekday = startDate.getDay();
     const weekdayName = startDate.toLocaleDateString("pt-BR", { weekday: "long" });
@@ -3179,19 +3218,26 @@ function vacationRuleIssues(restriction, ignoredRestrictionId = null) {
     }
   }
 
-  if (periods.length > 3) {
+  if (duplicatePeriodCount > 1) {
     issues.push({
-      category: "too-many-periods",
-      message: `Há ${periods.length} períodos de férias em ${year}. O limite definido é de 3 períodos.`,
+      category: "duplicate-period",
+      message: `O ${period}º período da competência ${competenceYear} foi cadastrado mais de uma vez.`,
     });
   }
 
-  if (isFirstPeriod) {
+  if (periods.length > 3) {
+    issues.push({
+      category: "too-many-periods",
+      message: `Há ${periods.length} períodos de férias na competência ${competenceYear}. O limite definido é de 3 períodos.`,
+    });
+  }
+
+  if (period === 1) {
     const totalDays = periods.reduce((total, item) => total + vacationPeriodDays(item), 0);
     if (totalDays !== 30) {
       issues.push({
         category: "total-days",
-        message: `Os ${periods.length} período(s) de férias de ${year} totalizam ${totalDays} dia(s), em vez de 30.`,
+        message: `Os ${periods.length} período(s) da competência ${competenceYear} totalizam ${totalDays} dia(s), em vez de 30.`,
       });
     }
   }
@@ -3220,6 +3266,42 @@ function confirmVacationRuleIssues(restrictions, ignoredRestrictionId = null) {
 function restrictionTypeOptions(selectedType) {
   const types = [...new Set([...RESTRICTION_TYPES, selectedType].filter(Boolean))];
   return types.map((type) => `<option value="${type}" ${type === selectedType ? "selected" : ""}>${type}</option>`).join("");
+}
+
+function vacationPeriodOptions(selectedPeriod) {
+  const selected = vacationPeriodNumber({ vacationPeriod: selectedPeriod });
+  return `
+    <option value="" ${selected ? "" : "selected"}>Selecione</option>
+    ${[1, 2, 3].map((period) => `<option value="${period}" ${period === selected ? "selected" : ""}>${period}º período</option>`).join("")}
+  `;
+}
+
+function updateCreateVacationFields() {
+  if (!els.restrictionType) return;
+  const isVacation = normalizeLegacyText(els.restrictionType.value) === "FERIAS";
+  els.restrictionForm.querySelectorAll(".vacation-metadata-field").forEach((field) => {
+    field.hidden = !isVacation;
+  });
+  [els.restrictionVacationPeriod, els.restrictionVacationYear].forEach((control) => {
+    if (!control) return;
+    control.disabled = !isVacation;
+    control.required = isVacation;
+  });
+  if (isVacation && !els.restrictionVacationYear.value) {
+    els.restrictionVacationYear.value = String(currentDate.getFullYear());
+  }
+}
+
+function updateEditVacationFields(item, type) {
+  const isVacation = normalizeLegacyText(type) === "FERIAS";
+  item.querySelectorAll(".vacation-edit-field").forEach((field) => {
+    field.classList.toggle("is-hidden", !isVacation);
+    field.querySelectorAll("input, select").forEach((control) => {
+      control.disabled = !isVacation;
+    });
+  });
+  const yearInput = item.querySelector('[data-edit-field="vacationYear"]');
+  if (isVacation && yearInput && !yearInput.value) yearInput.value = String(currentDate.getFullYear());
 }
 
 function restrictionPersonOptions(selectedPersonId) {
@@ -3298,7 +3380,9 @@ function hasVacationInYear(personId, year) {
   const start = `${year}-01-01`;
   const end = `${year}-12-31`;
   return state.restrictions.some((restriction) => {
-    return restriction.personId === personId && normalizeLegacyText(restriction.type) === "FERIAS" && restriction.start <= end && restriction.end >= start;
+    if (restriction.personId !== personId || normalizeLegacyText(restriction.type) !== "FERIAS") return false;
+    const competenceYear = vacationCompetenceYear(restriction);
+    return competenceYear ? competenceYear === Number(year) : restriction.start <= end && restriction.end >= start;
   });
 }
 
@@ -3317,33 +3401,37 @@ function renderVacationCheck() {
       .filter((restriction) => restriction.personId === restrictionPersonFilterValue && isVacationRestriction(restriction))
       .sort((a, b) => a.start.localeCompare(b.start));
     const vacationsByYear = vacations.reduce((groups, restriction) => {
-      const vacationYear = restriction.start.slice(0, 4);
-      if (!groups[vacationYear]) groups[vacationYear] = [];
-      groups[vacationYear].push(restriction);
+      const competenceYear = vacationCompetenceYear(restriction);
+      const groupKey = competenceYear ? String(competenceYear) : "unknown";
+      if (!groups[groupKey]) groups[groupKey] = [];
+      groups[groupKey].push(restriction);
       return groups;
     }, {});
     const composition = Object.entries(vacationsByYear)
-      .sort(([yearA], [yearB]) => yearB.localeCompare(yearA))
-      .map(([vacationYear, periods]) => {
+      .sort(([yearA], [yearB]) => yearA === "unknown" ? 1 : yearB === "unknown" ? -1 : yearB.localeCompare(yearA))
+      .map(([competenceYear, periods]) => {
+        periods.sort((a, b) => (vacationPeriodNumber(a) || 99) - (vacationPeriodNumber(b) || 99) || a.start.localeCompare(b.start));
         const totalDays = periods.reduce((total, restriction) => total + vacationPeriodDays(restriction), 0);
         return `
           <div class="vacation-composition-year">
-            <strong>${vacationYear}: ${totalDays} dia(s) em ${periods.length} período(s)</strong>
+            <strong>Competência ${competenceYear === "unknown" ? "não informada" : competenceYear}: ${totalDays} dia(s) em ${periods.length} período(s)</strong>
             <div class="vacation-period-list">
               ${periods.map((restriction) => `
                 <span title="${escapeHtmlValue(restriction.note || "Férias")}">
+                  <em>${vacationPeriodName(restriction)}</em>
                   ${formatDate(restriction.start)} a ${formatDate(restriction.end)}
                   <b>${vacationPeriodDays(restriction)} dias</b>
                 </span>`).join("")}
             </div>
           </div>`;
       }).join("");
+    const incompleteMetadataCount = vacations.filter((restriction) => !vacationPeriodNumber(restriction) || !vacationCompetenceYear(restriction)).length;
 
-    els.vacationCheck.className = `vacation-check person-vacation-check ${vacations.length ? "is-complete" : "has-missing"}`;
+    els.vacationCheck.className = `vacation-check person-vacation-check ${vacations.length && !incompleteMetadataCount ? "is-complete" : "has-missing"}`;
     els.vacationCheck.innerHTML = `
       <div class="vacation-person-head">
         <strong>Férias de ${escapeHtmlValue(person?.name || "Servidor")}</strong>
-        <span>${vacations.length ? `${vacations.length} período(s) cadastrado(s)` : "Nenhum período de férias cadastrado"}</span>
+        <span>${vacations.length ? `${vacations.length} período(s) cadastrado(s)${incompleteMetadataCount ? ` · ${incompleteMetadataCount} aguardando período e competência` : ""}` : "Nenhum período de férias cadastrado"}</span>
       </div>
       ${composition ? `<div class="vacation-composition">${composition}</div>` : ""}
     `;
@@ -3375,6 +3463,7 @@ function renderVacationCheck() {
 }
 
 function renderRestrictionEditItem(restriction, person, vacationIssues = []) {
+  const isVacation = isVacationRestriction(restriction);
   return `
     <div class="restriction-edit-grid">
       <label>
@@ -3384,6 +3473,14 @@ function renderRestrictionEditItem(restriction, person, vacationIssues = []) {
       <label>
         Tipo
         <select data-edit-field="type">${restrictionTypeOptions(restriction.type)}</select>
+      </label>
+      <label class="vacation-edit-field ${isVacation ? "" : "is-hidden"}">
+        Período das férias
+        <select data-edit-field="vacationPeriod" ${isVacation ? "" : "disabled"}>${vacationPeriodOptions(restriction.vacationPeriod)}</select>
+      </label>
+      <label class="vacation-edit-field ${isVacation ? "" : "is-hidden"}">
+        Ano de competência
+        <input data-edit-field="vacationYear" type="number" inputmode="numeric" min="2000" max="2100" value="${vacationCompetenceYear(restriction) || ""}" ${isVacation ? "" : "disabled"} />
       </label>
       <label>
         Início
@@ -3408,10 +3505,11 @@ function renderRestrictionEditItem(restriction, person, vacationIssues = []) {
 }
 
 function renderRestrictionViewItem(restriction, person, vacationIssues = []) {
+  const vacationMetadata = vacationMetadataText(restriction);
   return `
     <div>
       <h3>${person?.name || "Pessoa removida"} - ${restriction.type}</h3>
-      <p>${formatDate(restriction.start)} até ${formatDate(restriction.end)}${restriction.note ? ` - ${restriction.note}` : ""}</p>
+      <p>${formatDate(restriction.start)} até ${formatDate(restriction.end)}${vacationMetadata ? ` · <strong class="restriction-vacation-meta">${vacationMetadata}</strong>` : ""}${restriction.note ? ` - ${restriction.note}` : ""}</p>
       ${vacationIssuesHtml(vacationIssues)}
     </div>
     <div class="restriction-actions">
@@ -3435,13 +3533,23 @@ function updateRestrictionFromEditItem(id) {
   const restriction = state.restrictions.find((entry) => entry.id === id);
   if (!restriction) return;
   const personId = valueFor("personId");
+  const proposedType = valueFor("type");
+  const isVacation = normalizeLegacyText(proposedType) === "FERIAS";
+  const vacationPeriod = isVacation ? Number(valueFor("vacationPeriod")) : null;
+  const vacationYear = isVacation ? Number(valueFor("vacationYear")) : null;
+  if (isVacation && (![1, 2, 3].includes(vacationPeriod) || !Number.isInteger(vacationYear) || vacationYear < 2000 || vacationYear > 2100)) {
+    alert("Informe o período das férias e um ano de competência válido.");
+    return;
+  }
   const proposedRestriction = {
     ...restriction,
     personId,
-    type: valueFor("type"),
+    type: proposedType,
     start,
     end,
     note: valueFor("note").trim(),
+    vacationPeriod,
+    vacationYear,
   };
   const conflicts = overlappingRestrictions([personId], start, end, id);
   if (conflicts.length) {
@@ -3513,6 +3621,7 @@ function renderAll() {
   renderStats();
   renderPeople();
   renderRestrictions();
+  updateCreateVacationFields();
   updateUndoButton();
   if (els.checkScale) els.checkScale.textContent = reviewMode ? "Ocultar conferência" : "Conferir escala";
   updateSyncStatus();
@@ -3673,13 +3782,23 @@ els.restrictionForm.addEventListener("submit", (event) => {
     alertRestrictionOverlaps(conflicts);
     return;
   }
+  const restrictionType = els.restrictionType.value;
+  const isVacation = normalizeLegacyText(restrictionType) === "FERIAS";
+  const vacationPeriod = isVacation ? Number(els.restrictionVacationPeriod.value) : null;
+  const vacationYear = isVacation ? Number(els.restrictionVacationYear.value) : null;
+  if (isVacation && (![1, 2, 3].includes(vacationPeriod) || !Number.isInteger(vacationYear) || vacationYear < 2000 || vacationYear > 2100)) {
+    alert("Informe o período das férias e um ano de competência válido.");
+    return;
+  }
   const restrictions = personIds.map((personId) => ({
     id: crypto.randomUUID(),
     personId,
-    type: els.restrictionType.value,
+    type: restrictionType,
     start,
     end,
     note: els.restrictionNote.value.trim(),
+    vacationPeriod,
+    vacationYear,
   }));
   if (!confirmVacationRuleIssues(restrictions)) return;
   restrictions.forEach((restriction) => {
@@ -3687,9 +3806,12 @@ els.restrictionForm.addEventListener("submit", (event) => {
     removeAssignmentsBlockedByRestriction(restriction);
   });
   els.restrictionForm.reset();
+  updateCreateVacationFields();
   saveState();
   renderAll();
 });
+
+els.restrictionType?.addEventListener("change", updateCreateVacationFields);
 
 els.restrictionFilter?.addEventListener("change", (event) => {
   restrictionFilterValue = event.target.value;
@@ -3733,6 +3855,12 @@ els.restrictionList.addEventListener("click", (event) => {
     saveState();
     renderAll();
   }
+});
+
+els.restrictionList.addEventListener("change", (event) => {
+  if (event.target.dataset.editField !== "type") return;
+  const item = event.target.closest("[data-restriction-id]");
+  if (item) updateEditVacationFields(item, event.target.value);
 });
 
 els.holidayForm.addEventListener("submit", (event) => {

@@ -790,8 +790,8 @@ body.sync-pending .main {
 .restriction-create-form {
   grid-template-areas:
     "people people people people"
-    "type start end action"
-    "note note note note";
+    "type vacation-period vacation-year start"
+    "end note note action";
 }
 
 .restriction-create-form > label:has(#restriction-type) {
@@ -800,6 +800,14 @@ body.sync-pending .main {
 
 .restriction-create-form > label:has(#restriction-start) {
   grid-area: start;
+}
+
+.restriction-create-form > label:has(#restriction-vacation-period) {
+  grid-area: vacation-period;
+}
+
+.restriction-create-form > label:has(#restriction-vacation-year) {
+  grid-area: vacation-year;
 }
 
 .restriction-create-form > label:has(#restriction-end) {
@@ -812,6 +820,11 @@ body.sync-pending .main {
 
 .restriction-create-form > button[type="submit"] {
   grid-area: action;
+}
+
+.vacation-metadata-field[hidden],
+.vacation-edit-field.is-hidden {
+  display: none;
 }
 
 .holiday-form {
@@ -944,6 +957,13 @@ body.sync-pending .main {
 .vacation-period-list b {
   color: var(--green);
   font-size: 11px;
+}
+
+.vacation-period-list em {
+  color: var(--accent-dark);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
 }
 
 .vacation-missing-list {
@@ -1320,6 +1340,14 @@ body.sync-pending .main {
   border-left-color: #d49a16;
 }
 
+.restriction-item.vacation-issue-missing-metadata {
+  border-left-color: #d47b13;
+}
+
+.restriction-item.vacation-issue-duplicate-period {
+  border-left-color: #b83280;
+}
+
 .vacation-rule-warnings {
   display: flex;
   flex-wrap: wrap;
@@ -1371,6 +1399,23 @@ body.sync-pending .main {
   border-color: #e9c66d;
   background: #fff4cf;
   color: #765400;
+}
+
+.vacation-rule-warning.issue-missing-metadata {
+  border-color: #e4ad66;
+  background: #fff0dc;
+  color: #8b4b06;
+}
+
+.vacation-rule-warning.issue-duplicate-period {
+  border-color: #d99ac0;
+  background: #fff0f8;
+  color: #8f205f;
+}
+
+.restriction-vacation-meta {
+  color: var(--accent-dark);
+  font-weight: 800;
 }
 
 .restriction-edit-grid {
@@ -1531,6 +1576,8 @@ body.sync-pending .main {
     grid-template-areas:
       "people"
       "type"
+      "vacation-period"
+      "vacation-year"
       "start"
       "end"
       "note"
