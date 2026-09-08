@@ -2514,7 +2514,7 @@ function uniqueAssignedPeople(personIds) {
   });
 }
 
-function buildStableCsvShiftPlan(monthKeys, shift, headerPrefix, minimumColumns = 0) {
+function buildStableCsvShiftPlan(monthKeys, shift, headerPrefix, minimumColumns = 0, peopleForDay = (key) => getAssignments(key)[shift], cellText = csvPersonName) {
   const firstSeen = new Map();
   const positionCounts = new Map();
   const occurrenceCounts = new Map();
@@ -2527,7 +2527,7 @@ function buildStableCsvShiftPlan(monthKeys, shift, headerPrefix, minimumColumns 
   };
 
   monthKeys.forEach((key, dayIndex) => {
-    const personIds = uniqueAssignedPeople(getAssignments(key)[shift]);
+    const personIds = uniqueAssignedPeople(peopleForDay(key));
     personIds.forEach((personId, position) => {
       ensurePerson(personId, dayIndex * 100 + position);
       occurrenceCounts.set(personId, (occurrenceCounts.get(personId) || 0) + 1);
@@ -2577,13 +2577,68 @@ function buildStableCsvShiftPlan(monthKeys, shift, headerPrefix, minimumColumns 
     headers: Array.from({ length: columnCount }, (_, index) => `${headerPrefix} ${index + 1}`),
     cellsFor(key) {
       const cells = Array.from({ length: columnCount }, () => "");
-      uniqueAssignedPeople(getAssignments(key)[shift]).forEach((personId) => {
+      uniqueAssignedPeople(peopleForDay(key)).forEach((personId) => {
         const column = columnByPerson.get(personId);
-        if (column !== undefined && column < cells.length) cells[column] = csvPersonName(personId);
+        if (column !== undefined && column < cells.length) cells[column] = cellText(personId, key);
       });
       return cells;
     },
   };
+}
+
+function buildTwoColumnCsv24Plan(monthKeys) {
+  const lastColumn = new Map();
+  const rows = new Map();
+  monthKeys.forEach((key) => {
+    const people = uniqueAssignedPeople(getAssignments(key)["24x72"]);
+    if (people.length > 2) {
+      throw new Error(`Há mais de dois plantonistas de 24h em ${formatDate(key)}. Ajuste esse dia antes de exportar.`);
+    }
+    const cells = ["", ""];
+    if (people.length === 1) {
+      const column = lastColumn.get(people[0]) ?? 0;
+      cells[column] = csvPersonName(people[0]);
+      lastColumn.set(people[0], column);
+    } else if (people.length === 2) {
+      const cost = (flipped) => people.reduce((total, id, index) => {
+        const column = flipped ? 1 - index : index;
+        return total + (lastColumn.has(id) && lastColumn.get(id) !== column ? 1 : 0);
+      }, 0);
+      const flipped = cost(true) < cost(false);
+      people.forEach((id, index) => {
+        const column = flipped ? 1 - index : index;
+        cells[column] = csvPersonName(id);
+        lastColumn.set(id, column);
+      });
+    }
+    rows.set(key, cells);
+  });
+  return { headers: ["24h 1", "24h 2"], cellsFor: (key) => rows.get(key) || ["", ""] };
+}
+
+function buildCsvRestrictionPlan(monthKeys) {
+  const restrictionsForDay = (key) => state.restrictions.filter((item) => item.start <= key && item.end >= key);
+  // A person keeps one lane for the month; overlapping records get separate lanes.
+  const lanes = new Map();
+  const entriesByDay = new Map();
+  monthKeys.forEach((key) => {
+    const counts = new Map();
+    const entries = restrictionsForDay(key).map((item) => {
+      const index = counts.get(item.personId) || 0;
+      counts.set(item.personId, index + 1);
+      const lane = `${item.personId}|${index}`;
+      lanes.set(lane, item.personId);
+      return { lane, item };
+    });
+    entriesByDay.set(key, entries);
+  });
+  return buildStableCsvShiftPlan(monthKeys, null, "Restrição", 0,
+    (key) => entriesByDay.get(key).map((entry) => entry.lane),
+    (lane, key) => {
+      const item = entriesByDay.get(key).find((entry) => entry.lane === lane).item;
+      const name = csvPersonName(lanes.get(lane)) || "Pessoa removida";
+      return `${name}: ${item.type}${item.note ? ` - ${item.note}` : ""}`;
+    });
 }
 
 function exportMonthCsv() {
@@ -2597,12 +2652,19 @@ function exportMonthCsv() {
     const day = new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), index + 1);
     return dateKey(day);
   });
-  const plan24 = buildStableCsvShiftPlan(monthKeys, "24x72", "24h", 2);
+  let plan24;
+  try {
+    plan24 = buildTwoColumnCsv24Plan(monthKeys);
+  } catch (error) {
+    alert(error.message);
+    return;
+  }
   const plan12 = buildStableCsvShiftPlan(monthKeys, "12x36", "12x36", 1);
   const planCommercial = buildStableCsvShiftPlan(monthKeys, "Comercial", "Comercial", 0);
-  const headers = [...plan24.headers, ...plan12.headers, ...planCommercial.headers];
+  const planRestrictions = buildCsvRestrictionPlan(monthKeys);
+  const headers = [...plan24.headers, ...plan12.headers, ...planCommercial.headers, ...planRestrictions.headers];
   const rows = monthKeys.map((key) => {
-    return [...plan24.cellsFor(key), ...plan12.cellsFor(key), ...planCommercial.cellsFor(key)];
+    return [...plan24.cellsFor(key), ...plan12.cellsFor(key), ...planCommercial.cellsFor(key), ...planRestrictions.cellsFor(key)];
   });
 
   const csv = [headers, ...rows].map((row) => row.map(escapeCsvCell).join(";")).join("\r\n");
