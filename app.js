@@ -533,11 +533,11 @@ function applyLegacyCsvData(options = {}) {
 applyLegacyCsvData();
 
 function dateKey(date) {
-  return date.toISOString().slice(0, 10);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function monthKey(date = currentDate) {
-  return date.toISOString().slice(0, 7);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function addMonthsKey(key, amount) {
@@ -2778,6 +2778,58 @@ function vacationMetadataMismatches(localState, cloudState) {
   });
 }
 
+function stateDateMismatches(localState, cloudState) {
+  const assignmentRows = (source) =>
+    Object.keys(source?.assignments || {})
+      .sort()
+      .flatMap((key) =>
+        SHIFT_TYPES.flatMap((shift) =>
+          (source.assignments[key]?.[shift] || []).map((personId, position) => `${key}|${shift}|${personId}|${position}`),
+        ),
+      );
+  const localAssignmentRows = assignmentRows(localState);
+  const cloudAssignmentRows = assignmentRows(cloudState);
+  const mismatches = localAssignmentRows.length === cloudAssignmentRows.length && localAssignmentRows.every((row, index) => row === cloudAssignmentRows[index])
+    ? []
+    : ["escala"];
+
+  const cloudFixed = cloudState?.fixedAssignments || {};
+  Object.entries(localState?.fixedAssignments || {}).forEach(([key, fixed]) => {
+    const cloudValue = cloudFixed[key];
+    if (!cloudValue || cloudValue.originDate !== fixed.originDate) mismatches.push("cards fixos");
+  });
+
+  const cloudRestrictions = new Map((cloudState?.restrictions || []).map((restriction) => [String(restriction.id), restriction]));
+  (localState?.restrictions || []).forEach((restriction) => {
+    const cloudRestriction = cloudRestrictions.get(String(restriction.id));
+    if (!cloudRestriction || cloudRestriction.start !== restriction.start || cloudRestriction.end !== restriction.end) {
+      mismatches.push("restrições");
+    }
+  });
+
+  const cloudHolidays = new Map((cloudState?.holidays || []).map((holiday) => [String(holiday.id), holiday]));
+  (localState?.holidays || []).forEach((holiday) => {
+    if (cloudHolidays.get(String(holiday.id))?.date !== holiday.date) mismatches.push("feriados");
+  });
+  return [...new Set(mismatches)];
+}
+
+function assertCloudCivilDates(cloudState) {
+  const isDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+  const invalidAssignment = Object.keys(cloudState?.assignments || {}).some((key) => !isDate(key));
+  const invalidFixed = Object.entries(cloudState?.fixedAssignments || {}).some(([key, fixed]) => {
+    const [date] = key.split("|");
+    return !isDate(date) || !isDate(fixed?.originDate || date);
+  });
+  const invalidRestriction = (cloudState?.restrictions || []).some(
+    (restriction) => !isDate(restriction.start) || !isDate(restriction.end),
+  );
+  const invalidHoliday = (cloudState?.holidays || []).some((holiday) => !isDate(holiday.date));
+  if (invalidAssignment || invalidFixed || invalidRestriction || invalidHoliday) {
+    throw new Error("A nuvem devolveu datas com horário ou fuso. Atualize e reimplante o Apps Script; os dados locais não foram alterados.");
+  }
+}
+
 async function pullFromCloud() {
   const previousState = structuredClone(state);
   const previousSyncMeta = { ...syncMeta };
@@ -2790,6 +2842,7 @@ async function pullFromCloud() {
       alert("Ainda não existe escala salva na nuvem. Use Enviar para nuvem primeiro.");
       return;
     }
+    assertCloudCivilDates(data.state);
     if (syncMeta.dirty && !confirm("Existem alterações locais ainda não enviadas. Baixar da nuvem vai substituir este navegador. Continuar?")) {
       updateSyncStatus();
       return;
@@ -2874,7 +2927,8 @@ async function pushToCloud(force = false, authorized = false) {
     if (!response.ok || !data.ok) throw new Error(data.error || `Erro HTTP ${response.status}`);
     const verification = await requestCloudState();
     const metadataMismatches = vacationMetadataMismatches(state, verification.state);
-    if (metadataMismatches.length) {
+    const dateMismatches = stateDateMismatches(state, verification.state);
+    if (metadataMismatches.length || dateMismatches.length) {
       syncMeta = {
         version: Number(verification.version || data.version || 0),
         updatedAt: verification.updatedAt || data.updatedAt || null,
@@ -2882,6 +2936,11 @@ async function pushToCloud(force = false, authorized = false) {
         dirty: true,
       };
       persistSyncMeta();
+      if (dateMismatches.length) {
+        throw new Error(
+          `A nuvem alterou datas de ${dateMismatches.join(", ")}. Atualize e reimplante o Apps Script antes de enviar novamente.`,
+        );
+      }
       throw new Error(
         `A nuvem descartou período ou competência de ${metadataMismatches.length} registro(s) de férias. Atualize e reimplante o Apps Script antes de enviar novamente.`,
       );

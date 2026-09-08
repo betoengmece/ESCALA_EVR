@@ -377,7 +377,12 @@ function replaceSheetRows(name, headers, rows) {
   const maxColumns = Math.max(sheet.getMaxColumns(), headers.length);
   if (maxRows > 1) sheet.getRange(2, 1, maxRows - 1, maxColumns).clearContent();
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-  if (rows.length) sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+  if (rows.length) {
+    const range = sheet.getRange(2, 1, rows.length, headers.length);
+    // Datas da escala são valores civis; texto puro impede conversões de fuso do Sheets.
+    range.setNumberFormat("@");
+    range.setValues(rows.map((row) => row.map((value) => String(value ?? ""))));
+  }
 }
 
 function getRows(name) {
@@ -428,14 +433,14 @@ function jsonResponse(data) {
 function formatSheetDate(value) {
   if (!value) return "";
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    return Utilities.formatDate(value, SpreadsheetApp.openById(SPREADSHEET_ID).getSpreadsheetTimeZone(), "yyyy-MM-dd");
   }
   const text = String(value).trim();
   const match = text.match(/^(\d{4}-\d{2}-\d{2})/);
   if (match) return match[1];
   const parsed = new Date(text);
   if (!Number.isNaN(parsed.getTime())) {
-    return Utilities.formatDate(parsed, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    return Utilities.formatDate(parsed, SpreadsheetApp.openById(SPREADSHEET_ID).getSpreadsheetTimeZone(), "yyyy-MM-dd");
   }
   return text;
 }
@@ -443,14 +448,14 @@ function formatSheetDate(value) {
 function formatSheetMonth(value) {
   if (!value) return "";
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM");
+    return Utilities.formatDate(value, SpreadsheetApp.openById(SPREADSHEET_ID).getSpreadsheetTimeZone(), "yyyy-MM");
   }
   const text = String(value).trim();
   const match = text.match(/^(\d{4}-\d{2})/);
   if (match) return match[1];
   const parsed = new Date(text);
   if (!Number.isNaN(parsed.getTime())) {
-    return Utilities.formatDate(parsed, Session.getScriptTimeZone(), "yyyy-MM");
+    return Utilities.formatDate(parsed, SpreadsheetApp.openById(SPREADSHEET_ID).getSpreadsheetTimeZone(), "yyyy-MM");
   }
   return text;
 }
