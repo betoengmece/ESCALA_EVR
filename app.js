@@ -2762,6 +2762,22 @@ async function readCloudJson(response) {
   }
 }
 
+function vacationMetadataMismatches(localState, cloudState) {
+  const cloudRestrictions = new Map((cloudState?.restrictions || []).map((restriction) => [String(restriction.id), restriction]));
+  return (localState?.restrictions || []).filter((restriction) => {
+    if (!isVacationRestriction(restriction)) return false;
+    const expectedPeriod = vacationPeriodNumber(restriction);
+    const expectedYear = vacationCompetenceYear(restriction);
+    if (!expectedPeriod && !expectedYear) return false;
+    const cloudRestriction = cloudRestrictions.get(String(restriction.id));
+    return (
+      !cloudRestriction ||
+      vacationPeriodNumber(cloudRestriction) !== expectedPeriod ||
+      vacationCompetenceYear(cloudRestriction) !== expectedYear
+    );
+  });
+}
+
 async function pullFromCloud() {
   const previousState = structuredClone(state);
   const previousSyncMeta = { ...syncMeta };
@@ -2856,9 +2872,23 @@ async function pushToCloud(force = false, authorized = false) {
       return;
     }
     if (!response.ok || !data.ok) throw new Error(data.error || `Erro HTTP ${response.status}`);
+    const verification = await requestCloudState();
+    const metadataMismatches = vacationMetadataMismatches(state, verification.state);
+    if (metadataMismatches.length) {
+      syncMeta = {
+        version: Number(verification.version || data.version || 0),
+        updatedAt: verification.updatedAt || data.updatedAt || null,
+        lastSyncedAt: syncMeta.lastSyncedAt,
+        dirty: true,
+      };
+      persistSyncMeta();
+      throw new Error(
+        `A nuvem descartou período ou competência de ${metadataMismatches.length} registro(s) de férias. Atualize e reimplante o Apps Script antes de enviar novamente.`,
+      );
+    }
     syncMeta = {
-      version: Number(data.version || 0),
-      updatedAt: data.updatedAt || null,
+      version: Number(verification.version || data.version || 0),
+      updatedAt: verification.updatedAt || data.updatedAt || null,
       lastSyncedAt: new Date().toISOString(),
       dirty: false,
     };

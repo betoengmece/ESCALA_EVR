@@ -21,7 +21,7 @@ const HEADERS = {
   assignments: ["date", "shift", "person_id", "position"],
   fixedAssignments: ["date", "shift", "person_id", "origin_date", "origin_shift"],
   monthlyShifts: ["month", "person_id", "shift"],
-  restrictions: ["id", "person_id", "type", "start", "end", "note"],
+  restrictions: ["id", "person_id", "type", "start", "end", "note", "vacation_period", "vacation_year"],
   holidays: ["id", "date", "name"],
   legacyImports: ["import_key"],
   history: ["version", "updated_at", "source", "people_count", "assignment_rows", "fixed_rows", "restriction_count", "holiday_count"],
@@ -196,6 +196,8 @@ function writeNormalizedState(state) {
     restriction.start,
     restriction.end,
     restriction.note || "",
+    [1, 2, 3].includes(Number(restriction.vacationPeriod)) ? Number(restriction.vacationPeriod) : "",
+    /^\d{4}$/.test(String(restriction.vacationYear || "")) ? Number(restriction.vacationYear) : "",
   ]);
 
   const holidayRows = normalized.holidays.map((holiday) => [holiday.id, holiday.date, holiday.name]);
@@ -299,6 +301,8 @@ function readRestrictions() {
     start: formatSheetDate(row.start),
     end: formatSheetDate(row.end),
     note: String(row.note || ""),
+    vacationPeriod: [1, 2, 3].includes(Number(row.vacation_period)) ? Number(row.vacation_period) : null,
+    vacationYear: /^\d{4}$/.test(String(row.vacation_year || "")) ? Number(row.vacation_year) : null,
   }));
 }
 
