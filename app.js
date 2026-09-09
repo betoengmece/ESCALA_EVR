@@ -155,6 +155,7 @@ function loadSyncMeta() {
       updatedAt: saved.updatedAt || null,
       lastSyncedAt: saved.lastSyncedAt || null,
       dirty: Boolean(saved.dirty),
+      baseRestrictions: Array.isArray(saved.baseRestrictions) ? saved.baseRestrictions : null,
     };
   } catch (error) {
     return { version: 0, updatedAt: null, lastSyncedAt: null, dirty: false };
@@ -2856,6 +2857,7 @@ async function pullFromCloud() {
       updatedAt: data.updatedAt || null,
       lastSyncedAt: new Date().toISOString(),
       dirty: false,
+      baseRestrictions: structuredClone(data.state.restrictions || []),
     };
     renderAll();
     if (previousRawState) pushUndoSnapshot(previousRawState);
@@ -2904,12 +2906,15 @@ async function pushToCloud(force = false, authorized = false) {
   try {
     setSyncBusy(true);
     updateSyncStatus("Nuvem: enviando...", "busy");
+    const sentState = structuredClone(state);
     const response = await fetch(SYNC_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         action: "save",
-        state,
+        state: sentState,
+        password: SYNC_PASSWORD,
+        baseRestrictions: syncMeta.baseRestrictions,
         version: syncMeta.version || 0,
         force,
         source: location.href,
@@ -2919,20 +2924,24 @@ async function pushToCloud(force = false, authorized = false) {
     if (data.conflict) {
       setSyncBusy(false);
       updateSyncStatus(`Nuvem: conflito v${data.currentVersion}`, "error");
-      if (confirm("Existe uma versão mais nova na nuvem. Deseja sobrescrever mesmo assim com esta escala local?")) {
+      if (confirm("Existe uma versão mais nova na nuvem. Deseja enviar sua escala local? Férias e restrições serão combinadas; alterações conflitantes serão bloqueadas.")) {
         await pushToCloud(true, true);
       }
       return;
     }
     if (!response.ok || !data.ok) throw new Error(data.error || `Erro HTTP ${response.status}`);
+    const expectedState = { ...sentState, restrictions: data.restrictions || sentState.restrictions };
     const verification = await requestCloudState();
-    const metadataMismatches = vacationMetadataMismatches(state, verification.state);
-    const dateMismatches = stateDateMismatches(state, verification.state);
+    if (Number(verification.version) !== Number(data.version)) {
+      syncMeta.dirty = true;
+      persistSyncMeta();
+      throw new Error("O envio foi gravado, mas outra pessoa salvou dados em seguida. Atualize a nuvem antes da próxima edição; sua cópia local foi preservada.");
+    }
+    const metadataMismatches = vacationMetadataMismatches(expectedState, verification.state);
+    const dateMismatches = stateDateMismatches(expectedState, verification.state);
     if (metadataMismatches.length || dateMismatches.length) {
       syncMeta = {
-        version: Number(verification.version || data.version || 0),
-        updatedAt: verification.updatedAt || data.updatedAt || null,
-        lastSyncedAt: syncMeta.lastSyncedAt,
+        ...syncMeta,
         dirty: true,
       };
       persistSyncMeta();
@@ -2945,12 +2954,22 @@ async function pushToCloud(force = false, authorized = false) {
         `A nuvem descartou período ou competência de ${metadataMismatches.length} registro(s) de férias. Atualize e reimplante o Apps Script antes de enviar novamente.`,
       );
     }
+    const changedDuringUpload = JSON.stringify(state) !== JSON.stringify(sentState);
+    const before = new Map(sentState.restrictions.map((r) => [r.id, r]));
+    const local = new Map(state.restrictions.map((r) => [r.id, r]));
+    const remote = new Map(expectedState.restrictions.map((r) => [r.id, r]));
+    state.restrictions = [...new Set([...before.keys(), ...local.keys(), ...remote.keys()])].map((id) =>
+      JSON.stringify(local.get(id)) === JSON.stringify(before.get(id)) ? remote.get(id) : local.get(id),
+    ).filter(Boolean);
     syncMeta = {
       version: Number(verification.version || data.version || 0),
       updatedAt: verification.updatedAt || data.updatedAt || null,
       lastSyncedAt: new Date().toISOString(),
-      dirty: false,
+      dirty: changedDuringUpload,
+      baseRestrictions: structuredClone(expectedState.restrictions),
     };
+    saveState({ skipSyncDirty: true });
+    renderAll();
     persistSyncMeta();
     updateSyncStatus("Nuvem: enviado com sucesso", "ok");
     setTimeout(() => updateSyncStatus(), 1800);

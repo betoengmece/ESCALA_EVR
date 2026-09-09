@@ -1,6 +1,7 @@
 const SPREADSHEET_ID = "1TVUEFeuNlOj-aLMbKJ1kxJDnRt_uuowoac5G_Xoxzm4";
 const STATE_KEY = "escala-evr-v1";
 const SYNC_TOKEN = "";
+const ADMIN_PASSWORD = "EVR 2026";
 
 const SHEETS = {
   meta: "meta",
@@ -40,6 +41,7 @@ function doGet(e) {
   }
 
   if (action === "load") return loadState();
+  if (action === "team") return loadTeam();
 
   return jsonResponse({ ok: false, error: "Ação GET inválida." });
 }
@@ -53,7 +55,11 @@ function doPost(e) {
       return jsonResponse({ ok: false, error: "Token inválido." });
     }
 
-    if (action === "save") return saveState(payload);
+    if (action === "vacation-save" || action === "vacation-delete") return saveTeamVacation(payload);
+    if (action === "save") {
+      if (payload.password !== ADMIN_PASSWORD) return jsonResponse({ ok: false, error: "Senha administrativa incorreta. Atualize o aplicativo." });
+      return saveState(payload);
+    }
 
     return jsonResponse({ ok: false, error: "Ação POST inválida." });
   } catch (error) {
@@ -66,6 +72,12 @@ function doPost(e) {
 }
 
 function loadState() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try { return loadStateUnlocked(); } finally { lock.releaseLock(); }
+}
+
+function loadStateUnlocked() {
   ensureAllSheets();
   const meta = readMeta();
   let state = readNormalizedState();
@@ -98,6 +110,20 @@ function saveState(payload) {
     const currentVersion = Number(meta.version || 0);
     const incomingVersion = Number(payload.version || 0);
 
+    const currentRestrictions = readRestrictions();
+    let mergedRestrictions;
+    try {
+      if (Array.isArray(payload.baseRestrictions)) {
+        mergedRestrictions = mergeRestrictions(payload.baseRestrictions, payload.state.restrictions || [], currentRestrictions);
+      } else if (currentVersion > incomingVersion) {
+        throw new Error("Baixe a nuvem antes de enviar. Salve um backup das alterações locais primeiro; há novos dados que precisam ser preservados.");
+      } else {
+        mergedRestrictions = payload.state.restrictions || [];
+      }
+    } catch (error) {
+      return jsonResponse({ ok: false, error: error.message });
+    }
+
     if (payload.force !== true && currentVersion > incomingVersion) {
       return jsonResponse({
         ok: false,
@@ -110,7 +136,7 @@ function saveState(payload) {
 
     const nextVersion = Math.max(currentVersion, incomingVersion) + 1;
     const now = new Date().toISOString();
-    const summary = writeNormalizedState(payload.state);
+    const summary = writeNormalizedState({ ...payload.state, restrictions: mergedRestrictions });
 
     writeMeta({
       state_key: STATE_KEY,
@@ -133,10 +159,106 @@ function saveState(payload) {
       version: nextVersion,
       updatedAt: now,
       storage: "normalized-sheets",
+      restrictions: mergedRestrictions,
     });
   } finally {
     lock.releaseLock();
   }
+}
+
+function restrictionSignature(record) {
+  if (!record) return "";
+  return JSON.stringify([record.id, record.personId, record.type, record.start, record.end, record.note || "", Number(record.vacationPeriod) || null, Number(record.vacationYear) || null]);
+}
+
+// Three-way comparison preserves independent additions, edits and deletions.
+function mergeRestrictions(base, incoming, current) {
+  const maps = [base, incoming, current].map((list) => new Map(list.map((r) => [r.id, r])));
+  const ids = new Set([...maps[0].keys(), ...maps[1].keys(), ...maps[2].keys()]);
+  const result = [];
+  ids.forEach((id) => {
+    const [before, local, cloud] = maps.map((map) => map.get(id));
+    const [b, l, c] = [before, local, cloud].map(restrictionSignature);
+    if (l !== b && c !== b && l !== c) throw new Error("Uma restrição foi alterada nos dois aparelhos. Salve um backup local e baixe a nuvem para conferir antes de reenviar.");
+    const chosen = l === b ? cloud : local;
+    if (chosen) result.push(chosen);
+  });
+  return result;
+}
+
+function isTeamVacation(r) {
+  return String(r.type).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() === "ferias";
+}
+
+function vacationRevision(r) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, restrictionSignature(r)));
+}
+
+function teamSnapshot() {
+  return {
+    ok: true,
+    people: readPeople().map((p) => ({ id: p.id, name: p.name })),
+    vacations: readRestrictions().filter(isTeamVacation).map((r) => ({
+      id: r.id, personId: r.personId, start: r.start, end: r.end,
+      vacationPeriod: r.vacationPeriod, vacationYear: r.vacationYear, revision: vacationRevision(r),
+    })),
+  };
+}
+
+function loadTeam() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try { ensureAllSheets(); return jsonResponse(teamSnapshot()); }
+  finally { lock.releaseLock(); }
+}
+
+function vacationDays(r) {
+  return (Date.parse(r.end + "T00:00:00Z") - Date.parse(r.start + "T00:00:00Z")) / 86400000 + 1;
+}
+
+function validateTeamVacation(r, restrictions) {
+  for (const key of [r.start, r.end]) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !Number.isFinite(Date.parse(key + "T00:00:00Z")) || new Date(key + "T00:00:00Z").toISOString().slice(0, 10) !== key) throw new Error("Informe datas válidas.");
+  }
+  if (r.end < r.start) throw new Error("O término deve ser igual ou posterior ao início.");
+  if (![1, 2, 3].includes(r.vacationPeriod) || !Number.isInteger(r.vacationYear) || r.vacationYear < 2000 || r.vacationYear > 2100) throw new Error("Informe período e competência válidos.");
+  if (r.vacationPeriod === 1 && [0, 5, 6].includes(new Date(r.start + "T00:00:00Z").getUTCDay())) throw new Error("O primeiro período deve começar entre segunda e quinta-feira.");
+  const own = restrictions.filter((other) => other.personId === r.personId && other.id !== r.id);
+  if (own.some((other) => other.start <= r.end && other.end >= r.start)) throw new Error("Estas datas coincidem com férias ou outro impedimento seu já cadastrado.");
+  const sameYear = own.filter((other) => isTeamVacation(other) && Number(other.vacationYear) === r.vacationYear);
+  if (sameYear.length >= 3 || sameYear.some((other) => Number(other.vacationPeriod) === r.vacationPeriod)) throw new Error("Já existe esse período nesta competência, ou os três períodos já foram cadastrados.");
+  const total = sameYear.reduce((sum, other) => sum + vacationDays(other), vacationDays(r));
+  if (total > 30) throw new Error("O total desta competência ultrapassa 30 dias.");
+  if (sameYear.length === 2 && total !== 30) throw new Error("Com três períodos, o total deve completar 30 dias.");
+}
+
+function saveTeamVacation(payload) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    ensureAllSheets();
+    if (!readPeople().some((p) => p.id === payload.personId)) throw new Error("Pessoa não encontrada.");
+    const restrictions = readRestrictions();
+    const existing = restrictions.find((r) => r.id === payload.id);
+    if (existing && (existing.personId !== payload.personId || !isTeamVacation(existing))) throw new Error("Este registro não pertence às férias da pessoa selecionada.");
+    if (existing && payload.revision !== vacationRevision(existing)) throw new Error("Estas férias foram alteradas em outra tela. Atualize os dados antes de editar novamente.");
+    if (!existing && payload.revision) throw new Error("Este registro foi removido. Atualize os dados.");
+    let next = restrictions.filter((r) => r.id !== payload.id);
+    if (payload.action === "vacation-delete") {
+      if (!existing) throw new Error("Registro não encontrado. Atualize os dados.");
+    } else {
+      if (typeof payload.id !== "string" || !/^[a-zA-Z0-9-]{1,100}$/.test(payload.id)) throw new Error("Identificador inválido.");
+      const r = { id: payload.id, personId: payload.personId, type: "Férias", start: String(payload.start || ""), end: String(payload.end || ""), vacationPeriod: Number(payload.vacationPeriod), vacationYear: Number(payload.vacationYear), note: existing?.note || "" };
+      validateTeamVacation(r, restrictions);
+      next.push(r);
+    }
+    const rows = next.map((r) => [r.id, r.personId, r.type, r.start, r.end, r.note || "", r.vacationPeriod || "", r.vacationYear || ""]);
+    replaceSheetRows(SHEETS.restrictions, HEADERS.restrictions, rows);
+    const meta = readMeta();
+    writeMeta({ ...meta, version: String(Number(meta.version || 0) + 1), updated_at: new Date().toISOString(), source: "equipe:" + payload.personId });
+    return jsonResponse(teamSnapshot());
+  } catch (error) { return jsonResponse({ ok: false, error: error.message }); }
+  finally { lock.releaseLock(); }
 }
 
 function readNormalizedState() {
@@ -373,6 +495,8 @@ function ensureSheet(name, headers) {
 
 function replaceSheetRows(name, headers, rows) {
   const sheet = ensureSheet(name, headers);
+  if (sheet.getMaxRows() < rows.length + 1) sheet.insertRowsAfter(sheet.getMaxRows(), rows.length + 1 - sheet.getMaxRows());
+  if (sheet.getMaxColumns() < headers.length) sheet.insertColumnsAfter(sheet.getMaxColumns(), headers.length - sheet.getMaxColumns());
   const maxRows = sheet.getMaxRows();
   const maxColumns = Math.max(sheet.getMaxColumns(), headers.length);
   if (maxRows > 1) sheet.getRange(2, 1, maxRows - 1, maxColumns).clearContent();
