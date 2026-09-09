@@ -1599,6 +1599,33 @@ function validateCurrentSchedule() {
   alert(sections.join("\n\n"));
 }
 
+function completionCandidate(person, key, shift) {
+  if (!canUsePersonOnDay(person.id, key, shift)) return null;
+  if (shift === "24x72" && isDayBeforeVacation(person.id, key)) return null;
+  if (shift === "Comercial" && !isBusinessWorkday(key)) return null;
+  const balance = restBalanceForAssignment(person.id, key);
+  if (balance > 0) return null;
+
+  // Check the actual card index, including suspended days, not the permissive
+  // rest check used for manual adjustments after a restriction.
+  const next = nextAssignmentAfter(person.id, key);
+  const oldNextBalance = next ? restBalanceForAssignment(person.id, next.key) : 0;
+  const day = getAssignments(key);
+  const original = day[shift];
+  let nextBalance = 0;
+  try {
+    day[shift] = [...original, person.id];
+    if (next) nextBalance = restBalanceForAssignment(person.id, next.key);
+  } finally {
+    day[shift] = original;
+  }
+  if (nextBalance > 0) return null;
+  const savedRest = next
+    ? Math.max(0, -oldNextBalance) - Math.max(0, -balance) - Math.max(0, -nextBalance)
+    : Math.max(0, -balance);
+  return { person, balance, savedRest };
+}
+
 function completeCurrentSchedule() {
   const monthKeys = getMonthKeys();
   const before = JSON.stringify(monthKeys.map((key) => getAssignments(key)));
@@ -1608,33 +1635,52 @@ function completeCurrentSchedule() {
   monthKeys.forEach((key) => {
     const day = getAssignments(key);
     const preferredPair = cycle.pairs[cursor] || [];
-    const candidates = [
-      ...preferredPair.map((personId) => findPerson(personId)).filter(Boolean),
-      ...state.people
-        .filter((person) => canUsePersonOnDay(person.id, key, "24x72"))
-        .map((person) => restIndexCandidateScore(person, key, "24x72", monthKeys))
-        .sort(compareRestIndexCandidates)
-        .map(({ person }) => person),
-    ];
-
-    while (day["24x72"].length < 2 || day["24x72"].some((personId) => isEmptySlot(personId))) {
-      const slotIndex = day["24x72"].findIndex((personId) => isEmptySlot(personId));
-      const targetIndex = slotIndex >= 0 ? slotIndex : day["24x72"].length;
-      const person = candidates.find((candidate) => canUsePersonOnDay(candidate.id, key, "24x72"));
-      if (!person) break;
-      day["24x72"][targetIndex] = person.id;
+    while (day["24x72"].length < 2) day["24x72"].push(EMPTY_SLOT_ID);
+    for (let slot = 0; slot < Math.min(2, day["24x72"].length); slot += 1) {
+      if (!isEmptySlot(day["24x72"][slot]) || isFixedAssignment(key, "24x72", EMPTY_SLOT_ID)) continue;
+      const candidates = state.people
+        .map((person) => completionCandidate(person, key, "24x72"))
+        .filter(Boolean)
+        .map((candidate) => ({
+          ...candidate,
+          count: countMonthTotalAssignments(candidate.person.id, monthKeys),
+          preferred: preferredPair.includes(candidate.person.id),
+        }))
+        .sort((a, b) => Number(a.count > 0) - Number(b.count > 0)
+          || b.savedRest - a.savedRest
+          || Number(b.preferred) - Number(a.preferred)
+          || a.count - b.count
+          || a.person.name.localeCompare(b.person.name));
+      if (candidates.length) day["24x72"][slot] = candidates[0].person.id;
     }
     if (cycle.pairs.length) cursor = (cursor + 1) % cycle.pairs.length;
   });
 
+  // Existing shifts are anchors. Fill each person's earliest legal workdays
+  // between them, without shifting the anchors or creating an early return.
+  monthKeys.forEach((key) => {
+    state.people.forEach((person) => {
+      const shift = scheduleColumnForRegime(getPersonShiftForDate(person, key));
+      if (shift === "24x72" || !completionCandidate(person, key, shift)) return;
+      placePersonInShift(key, shift, person.id);
+    });
+  });
+
   const after = JSON.stringify(monthKeys.map((key) => getAssignments(key)));
-  if (after === before) {
-    alert("Não havia vagas que pudessem ser completadas sem alterar a escala atual.");
-    return;
+  if (after !== before) {
+    saveState();
+    renderAll();
   }
-  saveState();
-  renderAll();
-  alert("Vagas completadas sem alterar nenhuma pessoa que já estava na escala.");
+  const emptyCount = monthKeys.reduce((total, key) => total + getAssignments(key)["24x72"].filter(isEmptySlot).length, 0);
+  const positiveCount = monthKeys.reduce((total, key) => total + SHIFT_TYPES.reduce((count, shift) =>
+    count + getAssignments(key)[shift].filter((id) => !isEmptySlot(id) && restBalanceForAssignment(id, key) > 0).length, 0), 0);
+  const missing = state.people.filter((person) => countMonthTotalAssignments(person.id, monthKeys) === 0).map((person) => person.name);
+  alert([
+    after === before ? "Nenhuma inclusão segura disponível." : "Escala completada sem criar índices positivos e sem mover os cards existentes.",
+    `Vagas 24h vazias: ${emptyCount}. Não foram forçados plantões sem descanso disponível.`,
+    positiveCount ? `Atenção: ${positiveCount} card(s) já existente(s) com índice positivo foram preservados. Revise-os manualmente.` : "Nenhum card com índice positivo no mês.",
+    missing.length ? `Sem plantão no mês (verifique restrições e vagas): ${missing.join(", ")}.` : "Todos da equipe têm plantão no mês.",
+  ].join("\n\n"));
 }
 
 function calculateMonthBalance(personId, monthKeys) {
