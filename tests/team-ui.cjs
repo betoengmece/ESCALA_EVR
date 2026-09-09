@@ -43,7 +43,7 @@ const server = http.createServer((req, res) => {
       assert.equal(await page.locator('#vacations article').count(), 1);
       assert.equal(posts[0].personId, 'a'); assert.equal(posts[0].vacationYear, 2026);
       assert.match(await page.locator('#balance').innerText(), /10\/30/);
-      assert.equal(await page.locator('.count').filter({ hasText: '2 fora' }).count(), 10);
+      assert.equal(await page.locator('.count').filter({ hasText: '2 já escolheram essa data' }).count(), 10);
       await page.getByRole('button', { name: 'Editar', exact: true }).click();
       await page.locator('#year').fill('2027'); await page.locator('#year').dispatchEvent('change');
       assert.equal(await page.locator('#start').inputValue(), '2026-10-05');

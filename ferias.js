@@ -59,7 +59,8 @@ function renderCalendar() {
     const key = `${month}-${String(i + 1).padStart(2, "0")}`;
     const date = new Date(`${key}T12:00:00`);
     const ids = [...new Set(data.vacations.filter((r) => r.start <= key && r.end >= key).map((r) => r.personId))];
-    return `<div class="day ${[0, 6].includes(date.getDay()) ? "weekend" : ""}"><b>${i + 1} ${date.toLocaleDateString("pt-BR", { weekday: "short" })}</b><div class="names">${ids.map((id) => `<span class="tag ${id === personId ? "mine" : ""}">${escapeText(names.get(id) || "Pessoa removida")}</span>`).join("") || '<span class="empty">—</span>'}</div><span class="count ${ids.length > 1 ? "busy" : ""}">${ids.length} fora</span></div>`;
+    const countLabel = ids.length === 0 ? "Ninguém escolheu essa data" : `${ids.length} já ${ids.length === 1 ? "escolheu" : "escolheram"} essa data`;
+    return `<div class="day ${[0, 6].includes(date.getDay()) ? "weekend" : ""}"><b>${i + 1} ${date.toLocaleDateString("pt-BR", { weekday: "short" })}</b><div class="names">${ids.map((id) => `<span class="tag ${id === personId ? "mine" : ""}">${escapeText(names.get(id) || "Pessoa removida")}</span>`).join("") || '<span class="empty">—</span>'}</div><span class="count ${ids.length > 1 ? "busy" : ""}">${countLabel}</span></div>`;
   }).join("");
 }
 function draft() {
