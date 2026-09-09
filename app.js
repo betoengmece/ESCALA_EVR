@@ -2740,14 +2740,21 @@ function setSyncBusy(isBusy) {
 }
 
 async function requestCloudState() {
-  const response = await fetch(`${SYNC_ENDPOINT}?action=load&t=${Date.now()}`, {
-    method: "GET",
-    cache: "no-store",
-  });
-  if (!response.ok) throw new Error(`Erro HTTP ${response.status}`);
-  const data = await readCloudJson(response);
-  if (!data.ok) throw new Error(data.error || "Resposta inválida da nuvem.");
-  return data;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(`${SYNC_ENDPOINT}?action=load&t=${Date.now()}`, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Erro HTTP ${response.status}`);
+    const data = await readCloudJson(response);
+    if (!data.ok) throw new Error(data.error || "Resposta inválida da nuvem.");
+    return data;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function readCloudJson(response) {
@@ -2921,9 +2928,27 @@ function refreshCloudRestrictions() {
   return restrictionRefresh;
 }
 
+let scheduleActionBusy = false;
 async function withCurrentRestrictions(action) {
-  try { await refreshCloudRestrictions(); action(); }
-  catch (error) { alert(`Não foi possível atualizar as restrições. ${error.message}`); }
+  if (scheduleActionBusy) return;
+  scheduleActionBusy = true;
+  const buttons = [els.autoFill, els.validateSchedule, els.completeSchedule].filter(Boolean);
+  const previousDisabled = buttons.map((button) => button.disabled);
+  buttons.forEach((button) => { button.disabled = true; });
+  const label = document.getElementById("restriction-sync-status");
+  if (label) label.textContent = "Consultando restrições antes de continuar...";
+  try {
+    try { await refreshCloudRestrictions(); }
+    catch (error) {
+      if (label) label.textContent = `Usando as restrições salvas neste aparelho. Não foi possível atualizar a nuvem: ${error.name === "AbortError" ? "tempo de resposta excedido" : error.message}. Confira novos impedimentos antes de enviar a escala.`;
+    }
+    action();
+  } catch (error) {
+    alert(`Não foi possível concluir esta ação na escala. ${error.message}`);
+  } finally {
+    scheduleActionBusy = false;
+    buttons.forEach((button, index) => { button.disabled = previousDisabled[index]; });
+  }
 }
 
 async function pushToCloud(force = false, authorized = false) {
