@@ -47,6 +47,7 @@
           <div class="sync-box">
             <a href="ferias.html" target="_blank" rel="noopener">Férias da equipe</a>
             <strong id="sync-status">Nuvem: não sincronizado</strong>
+            <p id="restriction-sync-status" role="status">Consultando restrições da nuvem...</p>
             <button id="sync-pull" class="secondary-action" type="button">Baixar da nuvem</button>
             <button id="sync-push" class="secondary-action" type="button">Enviar para nuvem</button>
           </div>
@@ -84,7 +85,7 @@
           <div id="stats-grid" class="stats-grid"></div>
         </section>
 
-        <section id="restrictions-tab" class="tab-page">
+        <section id="restrictions-tab" class="tab-page" hidden style="display:none">
           <header class="topbar">
             <div>
               <p class="eyebrow">Impedimentos</p>
@@ -238,6 +239,6 @@
 
     <script src="legacy-data.js"></script>
     <script src="initial-state.js"></script>
-    <script src="app.js?v=20260909-1"></script>
+    <script src="app.js?v=20260909-2"></script>
   </body>
 </html>

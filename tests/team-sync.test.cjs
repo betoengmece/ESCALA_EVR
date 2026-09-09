@@ -17,6 +17,7 @@ function harness(initial = []) {
   context.jsonResponse = (v) => v;
   context.readPeople = () => [{ id: 'a', name: 'Ana' }, { id: 'b', name: 'Bruno' }];
   context.readRestrictions = () => structuredClone(records);
+  context.readHolidays = () => [{ id: 'holiday', date: '2026-10-12', name: 'Feriado' }];
   context.readMeta = () => ({ version });
   context.writeMeta = (v) => { assert(held); version = Number(v.version); };
   context.appendHistory = () => {};
@@ -24,7 +25,9 @@ function harness(initial = []) {
     assert(held); writes.push(name);
     records = rows.map(([id, personId, type, start, end, note, vacationPeriod, vacationYear]) => ({ id, personId, type, start, end, note, vacationPeriod, vacationYear }));
   };
-  context.writeNormalizedState = (state) => { assert(held); records = structuredClone(state.restrictions); writes.push('full-state'); return {}; };
+  const originalWriter = context.writeNormalizedState;
+  context.writeNormalizedState = (state, options) => { assert(held); assert.equal(options.scheduleOnly, true); assert.equal(state.holidays[0].date, '2026-10-12'); records = structuredClone(state.restrictions); writes.push('full-state'); return {}; };
+  context.originalWriter = originalWriter;
   return { context, writes, records: () => records, version: () => version };
 }
 test('independent submissions preserve both people and touch only restrictions', () => {
@@ -62,19 +65,12 @@ test('vacation limits, overlap and first-period weekday enforced on server', () 
   assert.throws(() => h.context.validateTeamVacation(vacation('three', 'a', { vacationPeriod: 3, start: '2026-12-01', end: '2026-12-09' }), previous));
   assert.doesNotThrow(() => h.context.validateTeamVacation(vacation('three', 'a', { vacationPeriod: 3, start: '2026-12-01', end: '2026-12-10' }), previous));
 });
-test('administrative merge preserves additions and deletions from team', () => {
-  const h = harness(); const base = [vacation('old')];
-  assert.equal(h.context.mergeRestrictions(base, base, [vacation('new', 'b')])[0].id, 'new');
-  const merged = h.context.mergeRestrictions(base, [vacation('old', 'a', { note: 'admin' })], [...base, vacation('new', 'b')]);
-  assert.equal(merged.length, 2); assert.equal(merged[0].note, 'admin');
-  assert.throws(() => h.context.mergeRestrictions(base, [], [vacation('old', 'a', { end: '2026-10-15' })]));
-});
 test('forced old administrative save without baseline cannot erase team data', () => {
   const h = harness([vacation('new')]);
   const result = h.context.saveState({ state: { restrictions: [] }, version: 1, force: true });
-  assert.equal(result.ok, false); assert.equal(h.writes.length, 0);
+  assert.equal(result.ok, true); assert.equal(h.records()[0].id, 'new');
 });
-test('forced administrative save merges baseline and keeps new team vacation', () => {
+test('forced administrative save ignores stale restrictions even with a baseline', () => {
   const h = harness([vacation('new')]);
   const result = h.context.saveState({ state: { restrictions: [] }, baseRestrictions: [], version: 1, force: true });
   assert.equal(result.ok, true); assert.equal(h.records()[0].id, 'new');
@@ -84,7 +80,7 @@ test('administrative endpoint requires password on the server', () => {
   assert.equal(h.context.doPost({ postData: { contents: JSON.stringify({ action: 'save', state: {} }) } }).ok, false);
 });
 
-test('administrative client incorporates team additions and retains its reference for the next upload', async () => {
+test('administrative client only sends schedule and refreshes cloud restrictions', async () => {
   const source = fs.readFileSync(require('node:path').join(__dirname, '../app.js'), 'utf8');
   const original = vacation('old'); const addition = vacation('team', 'b');
   const state = { people: [], assignments: {}, fixedAssignments: {}, holidays: [], restrictions: [original] };
@@ -93,17 +89,40 @@ test('administrative client incorporates team additions and retains its referenc
     state, syncMeta: { version: 4, baseRestrictions: [original], dirty: true },
     SYNC_ENDPOINT: 'mock', SYNC_PASSWORD: 'password', SHIFT_TYPES: ['24x72', '12x36', 'Comercial'],
     structuredClone, location: { href: 'test' }, Date, Map, Set, JSON, Number, String,
-    fetch: async (_, options) => { const sent = JSON.parse(options.body); assert.equal(sent.password, 'password'); assert.equal(sent.baseRestrictions.length, 1); return { ok: true }; },
+    fetch: async (_, options) => { const sent = JSON.parse(options.body); assert.equal(sent.password, 'password'); assert.equal('restrictions' in sent.state, false); assert.equal('holidays' in sent.state, false); assert.equal('baseRestrictions' in sent, false); return { ok: true }; },
     readCloudJson: async () => ({ ok: true, version: 5, restrictions: cloud.restrictions }),
-    requestCloudState: async () => ({ ok: true, version: 5, state: cloud }),
+    requestCloudState: async () => ({ ok: true, exists: true, restrictionStorage: 'independent-v1', version: 5, state: cloud }),
     isVacationRestriction: (r) => r.type === 'Férias', vacationPeriodNumber: (r) => r?.vacationPeriod || null, vacationCompetenceYear: (r) => r?.vacationYear || null,
     setSyncBusy() {}, updateSyncStatus() {}, persistSyncMeta() {}, saveState() {}, renderAll() {}, setTimeout() {},
+    document: { getElementById: () => null }, getMonthKeys: () => [],
     alert(message) { throw new Error(message); },
   });
   vm.runInContext(source.slice(source.indexOf('function vacationMetadataMismatches('), source.indexOf('async function pullFromCloud(')), context);
-  vm.runInContext(source.slice(source.indexOf('async function pushToCloud('), source.indexOf('function restoreLegacyCsvData(')), context);
+  vm.runInContext(source.slice(source.indexOf('function scheduleState('), source.indexOf('function restoreLegacyCsvData(')), context);
   await context.pushToCloud(false, true);
   assert.equal(context.state.restrictions.length, 2);
-  assert.equal(context.syncMeta.baseRestrictions.length, 2);
+  assert.equal(context.syncMeta.baseRestrictions, undefined);
   assert.equal(context.syncMeta.dirty, false);
+});
+
+test('schedule writer never writes restrictions or holiday sheets', () => {
+  const h = harness([vacation('protected')]);
+  const writes = [];
+  h.context.replaceSheetRows = (name) => writes.push(name);
+  h.context.originalWriter({ people: [], restrictions: [], holidays: [], assignments: {} }, { scheduleOnly: true });
+  assert.equal(writes.includes('restrictions'), false);
+  assert.equal(writes.includes('holidays'), false);
+  assert.equal(writes.includes('assignments'), true);
+});
+
+test('admin restrictions require password and support isolated course edits', () => {
+  const h = harness([vacation('keep', 'b')]);
+  const payload = { action: 'restriction-save', personId: 'a', id: 'course', type: 'Curso', start: '2026-11-02', end: '2026-11-05', note: 'Curso teste' };
+  const post = (p) => h.context.doPost({ postData: { contents: JSON.stringify(p) } });
+  assert.equal(post(payload).ok, false);
+  assert.equal(post({ ...payload, password: 'EVR 2026' }).ok, true);
+  assert.equal(h.records().length, 2);
+  assert.equal(h.records()[1].type, 'Curso');
+  assert.deepEqual(h.writes, ['restrictions']);
+  assert.equal(post({ ...payload, password: 'EVR 2026', note: 'stale' }).ok, false);
 });

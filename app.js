@@ -155,7 +155,6 @@ function loadSyncMeta() {
       updatedAt: saved.updatedAt || null,
       lastSyncedAt: saved.lastSyncedAt || null,
       dirty: Boolean(saved.dirty),
-      baseRestrictions: Array.isArray(saved.baseRestrictions) ? saved.baseRestrictions : null,
     };
   } catch (error) {
     return { version: 0, updatedAt: null, lastSyncedAt: null, dirty: false };
@@ -252,7 +251,7 @@ function undoLastChange() {
   const previousRawState = undoStack.pop();
   if (!previousRawState) return;
   try {
-    state = normalizeLoadedState(JSON.parse(previousRawState));
+    state = { ...normalizeLoadedState(JSON.parse(previousRawState)), restrictions: state.restrictions, holidays: state.holidays };
     persistUndoStack();
     saveState({ skipUndo: true });
     renderAll();
@@ -2693,7 +2692,7 @@ function importBackupFile(file) {
         return;
       }
       if (!confirm("Carregar este backup vai substituir os dados atuais salvos neste navegador. Continuar?")) return;
-      state = restored;
+      state = { ...restored, restrictions: state.restrictions, holidays: state.holidays };
       saveState();
       renderAll();
       alert("Backup carregado com sucesso.");
@@ -2857,7 +2856,6 @@ async function pullFromCloud() {
       updatedAt: data.updatedAt || null,
       lastSyncedAt: new Date().toISOString(),
       dirty: false,
-      baseRestrictions: structuredClone(data.state.restrictions || []),
     };
     renderAll();
     if (previousRawState) pushUndoSnapshot(previousRawState);
@@ -2897,6 +2895,37 @@ function openSyncPasswordDialog(force = false) {
   requestAnimationFrame(() => els.syncPassword?.focus());
 }
 
+function scheduleState(source = state) {
+  const { restrictions, holidays, ...schedule } = source;
+  return structuredClone(schedule);
+}
+
+function applyCloudRestrictions(data) {
+  if (data.restrictionStorage !== "independent-v1") throw new Error("Atualize a implantação do Apps Script para ativar as restrições independentes.");
+  if (!data.exists || !data.state || !Array.isArray(data.state.restrictions) || !Array.isArray(data.state.holidays)) throw new Error("A nuvem ainda não possui os dados das restrições.");
+  assertCloudCivilDates(data.state);
+  const changed = JSON.stringify(state.restrictions) !== JSON.stringify(data.state.restrictions) || JSON.stringify(state.holidays) !== JSON.stringify(data.state.holidays);
+  state.restrictions = structuredClone(data.state.restrictions);
+  state.holidays = structuredClone(data.state.holidays);
+  saveState({ skipUndo: true, skipSyncDirty: true });
+  renderAll();
+  const conflicts = getMonthKeys().reduce((sum, key) => sum + SHIFT_TYPES.reduce((count, shift) => count + getAssignments(key)[shift].filter((id) => isRestricted(id, key) || (shift === "24x72" && isDayBeforeVacation(id, key))).length, 0), 0);
+  const label = document.getElementById("restriction-sync-status");
+  if (label) label.textContent = `Restrições atualizadas da nuvem.${conflicts ? ` ${conflicts} card(s) com impedimento no mês; confira os avisos na escala.` : ""}`;
+  return changed && conflicts > 0;
+}
+
+let restrictionRefresh = null;
+function refreshCloudRestrictions() {
+  if (!restrictionRefresh) restrictionRefresh = requestCloudState().then((data) => { applyCloudRestrictions(data); return data; }).finally(() => { restrictionRefresh = null; });
+  return restrictionRefresh;
+}
+
+async function withCurrentRestrictions(action) {
+  try { await refreshCloudRestrictions(); action(); }
+  catch (error) { alert(`Não foi possível atualizar as restrições. ${error.message}`); }
+}
+
 async function pushToCloud(force = false, authorized = false) {
   if (!authorized) {
     openSyncPasswordDialog(force);
@@ -2906,7 +2935,8 @@ async function pushToCloud(force = false, authorized = false) {
   try {
     setSyncBusy(true);
     updateSyncStatus("Nuvem: enviando...", "busy");
-    const sentState = structuredClone(state);
+    await refreshCloudRestrictions();
+    const sentState = scheduleState();
     const response = await fetch(SYNC_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
@@ -2914,7 +2944,6 @@ async function pushToCloud(force = false, authorized = false) {
         action: "save",
         state: sentState,
         password: SYNC_PASSWORD,
-        baseRestrictions: syncMeta.baseRestrictions,
         version: syncMeta.version || 0,
         force,
         source: location.href,
@@ -2924,49 +2953,32 @@ async function pushToCloud(force = false, authorized = false) {
     if (data.conflict) {
       setSyncBusy(false);
       updateSyncStatus(`Nuvem: conflito v${data.currentVersion}`, "error");
-      if (confirm("Existe uma versão mais nova na nuvem. Deseja enviar sua escala local? Férias e restrições serão combinadas; alterações conflitantes serão bloqueadas.")) {
+      if (confirm("Existe uma versão mais nova na nuvem. Deseja substituir somente a escala e a equipe com seus dados locais? Férias, impedimentos e feriados permanecerão intactos.")) {
         await pushToCloud(true, true);
       }
       return;
     }
     if (!response.ok || !data.ok) throw new Error(data.error || `Erro HTTP ${response.status}`);
-    const expectedState = { ...sentState, restrictions: data.restrictions || sentState.restrictions };
+    const expectedState = { ...sentState, restrictions: [], holidays: [] };
     const verification = await requestCloudState();
-    if (Number(verification.version) !== Number(data.version)) {
-      syncMeta.dirty = true;
-      persistSyncMeta();
-      throw new Error("O envio foi gravado, mas outra pessoa salvou dados em seguida. Atualize a nuvem antes da próxima edição; sua cópia local foi preservada.");
-    }
-    const metadataMismatches = vacationMetadataMismatches(expectedState, verification.state);
     const dateMismatches = stateDateMismatches(expectedState, verification.state);
-    if (metadataMismatches.length || dateMismatches.length) {
+    if (dateMismatches.length) {
       syncMeta = {
         ...syncMeta,
         dirty: true,
       };
       persistSyncMeta();
-      if (dateMismatches.length) {
-        throw new Error(
-          `A nuvem alterou datas de ${dateMismatches.join(", ")}. Atualize e reimplante o Apps Script antes de enviar novamente.`,
-        );
-      }
       throw new Error(
-        `A nuvem descartou período ou competência de ${metadataMismatches.length} registro(s) de férias. Atualize e reimplante o Apps Script antes de enviar novamente.`,
+        `A conferência da escala enviada encontrou diferenças em ${dateMismatches.join(", ")}. Sua cópia local foi preservada.`,
       );
     }
-    const changedDuringUpload = JSON.stringify(state) !== JSON.stringify(sentState);
-    const before = new Map(sentState.restrictions.map((r) => [r.id, r]));
-    const local = new Map(state.restrictions.map((r) => [r.id, r]));
-    const remote = new Map(expectedState.restrictions.map((r) => [r.id, r]));
-    state.restrictions = [...new Set([...before.keys(), ...local.keys(), ...remote.keys()])].map((id) =>
-      JSON.stringify(local.get(id)) === JSON.stringify(before.get(id)) ? remote.get(id) : local.get(id),
-    ).filter(Boolean);
+    const changedDuringUpload = JSON.stringify(scheduleState()) !== JSON.stringify(sentState);
+    applyCloudRestrictions(verification);
     syncMeta = {
-      version: Number(verification.version || data.version || 0),
+      version: Number(data.version || 0),
       updatedAt: verification.updatedAt || data.updatedAt || null,
       lastSyncedAt: new Date().toISOString(),
       dirty: changedDuringUpload,
-      baseRestrictions: structuredClone(expectedState.restrictions),
     };
     saveState({ skipSyncDirty: true });
     renderAll();
@@ -3799,6 +3811,10 @@ function renderAll() {
 
 els.tabs.forEach((button) => {
   button.addEventListener("click", () => {
+    if (button.dataset.tab === "restrictions") {
+      window.open("ferias.html?admin=1", "_blank", "noopener");
+      return;
+    }
     els.tabs.forEach((tab) => tab.classList.remove("active"));
     els.pages.forEach((page) => page.classList.remove("active"));
     button.classList.add("active");
@@ -3822,9 +3838,9 @@ els.monthPicker.addEventListener("change", (event) => {
   renderAll();
 });
 
-els.autoFill.addEventListener("click", autoFill24x72);
-els.validateSchedule.addEventListener("click", validateCurrentSchedule);
-els.completeSchedule.addEventListener("click", completeCurrentSchedule);
+els.autoFill.addEventListener("click", () => withCurrentRestrictions(autoFill24x72));
+els.validateSchedule.addEventListener("click", () => withCurrentRestrictions(validateCurrentSchedule));
+els.completeSchedule.addEventListener("click", () => withCurrentRestrictions(completeCurrentSchedule));
 els.undoAction?.addEventListener("click", undoLastChange);
 els.checkScale.addEventListener("click", () => {
   reviewMode = !reviewMode;
@@ -3880,7 +3896,6 @@ els.peopleList.addEventListener("click", (event) => {
   Object.keys(state.assignments).forEach((key) => {
     removePersonFromDay(id, key);
   });
-  state.restrictions = state.restrictions.filter((restriction) => restriction.personId !== id);
   Object.values(state.monthlyShifts).forEach((shifts) => delete shifts[id]);
   saveState();
   renderAll();
@@ -4059,3 +4074,11 @@ els.holidayList.addEventListener("click", (event) => {
 });
 
 renderAll();
+function updateRestrictionCache() {
+  refreshCloudRestrictions().catch((error) => {
+    const label = document.getElementById("restriction-sync-status");
+    if (label) label.textContent = `Restrições não atualizadas: ${error.message}`;
+  });
+}
+window.addEventListener("focus", updateRestrictionCache);
+updateRestrictionCache();

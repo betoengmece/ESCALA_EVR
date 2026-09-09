@@ -56,6 +56,10 @@ function doPost(e) {
     }
 
     if (action === "vacation-save" || action === "vacation-delete") return saveTeamVacation(payload);
+    if (["restriction-list", "restriction-save", "restriction-delete"].includes(action)) {
+      if (payload.password !== ADMIN_PASSWORD) return jsonResponse({ ok: false, error: "Senha administrativa incorreta." });
+      return manageRestrictions(payload);
+    }
     if (action === "save") {
       if (payload.password !== ADMIN_PASSWORD) return jsonResponse({ ok: false, error: "Senha administrativa incorreta. Atualize o aplicativo." });
       return saveState(payload);
@@ -91,6 +95,7 @@ function loadStateUnlocked() {
     exists: hasStateContent(state),
     key: STATE_KEY,
     state,
+    restrictionStorage: "independent-v1",
     version: Number(meta.version || 0),
     updatedAt: meta.updated_at || null,
   });
@@ -111,20 +116,10 @@ function saveState(payload) {
     const incomingVersion = Number(payload.version || 0);
 
     const currentRestrictions = readRestrictions();
-    let mergedRestrictions;
-    try {
-      if (Array.isArray(payload.baseRestrictions)) {
-        mergedRestrictions = mergeRestrictions(payload.baseRestrictions, payload.state.restrictions || [], currentRestrictions);
-      } else if (currentVersion > incomingVersion) {
-        throw new Error("Baixe a nuvem antes de enviar. Salve um backup das alterações locais primeiro; há novos dados que precisam ser preservados.");
-      } else {
-        mergedRestrictions = payload.state.restrictions || [];
-      }
-    } catch (error) {
-      return jsonResponse({ ok: false, error: error.message });
-    }
+    const currentHolidays = readHolidays();
 
-    if (payload.force !== true && currentVersion > incomingVersion) {
+    const scheduleVersion = Number(meta.schedule_version || currentVersion);
+    if (payload.force !== true && scheduleVersion > incomingVersion) {
       return jsonResponse({
         ok: false,
         conflict: true,
@@ -136,12 +131,13 @@ function saveState(payload) {
 
     const nextVersion = Math.max(currentVersion, incomingVersion) + 1;
     const now = new Date().toISOString();
-    const summary = writeNormalizedState({ ...payload.state, restrictions: mergedRestrictions });
+    const summary = writeNormalizedState({ ...payload.state, restrictions: currentRestrictions, holidays: currentHolidays }, { scheduleOnly: true });
 
     writeMeta({
       state_key: STATE_KEY,
       schema: "normalized-sheets-v1",
       version: String(nextVersion),
+      schedule_version: String(nextVersion),
       updated_at: now,
       source: payload.source || "web",
     });
@@ -159,7 +155,9 @@ function saveState(payload) {
       version: nextVersion,
       updatedAt: now,
       storage: "normalized-sheets",
-      restrictions: mergedRestrictions,
+      restrictions: currentRestrictions,
+      holidays: currentHolidays,
+      restrictionStorage: "independent-v1",
     });
   } finally {
     lock.releaseLock();
@@ -168,22 +166,7 @@ function saveState(payload) {
 
 function restrictionSignature(record) {
   if (!record) return "";
-  return JSON.stringify([record.id, record.personId, record.type, record.start, record.end, record.note || "", Number(record.vacationPeriod) || null, Number(record.vacationYear) || null]);
-}
-
-// Three-way comparison preserves independent additions, edits and deletions.
-function mergeRestrictions(base, incoming, current) {
-  const maps = [base, incoming, current].map((list) => new Map(list.map((r) => [r.id, r])));
-  const ids = new Set([...maps[0].keys(), ...maps[1].keys(), ...maps[2].keys()]);
-  const result = [];
-  ids.forEach((id) => {
-    const [before, local, cloud] = maps.map((map) => map.get(id));
-    const [b, l, c] = [before, local, cloud].map(restrictionSignature);
-    if (l !== b && c !== b && l !== c) throw new Error("Uma restrição foi alterada nos dois aparelhos. Salve um backup local e baixe a nuvem para conferir antes de reenviar.");
-    const chosen = l === b ? cloud : local;
-    if (chosen) result.push(chosen);
-  });
-  return result;
+  return JSON.stringify([record.id, record.personId, record.type, record.start, record.end, record.note || "", Number(record.vacationPeriod) || null, Number(record.vacationYear) || null, record.date, record.name]);
 }
 
 function isTeamVacation(r) {
@@ -209,6 +192,67 @@ function loadTeam() {
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try { ensureAllSheets(); return jsonResponse(teamSnapshot()); }
+  finally { lock.releaseLock(); }
+}
+
+function adminRestrictionSnapshot() {
+  return {
+    ...teamSnapshot(),
+    restrictions: readRestrictions().map((r) => ({ ...r, revision: vacationRevision(r) })),
+    holidays: readHolidays().map((r) => ({ ...r, revision: vacationRevision(r) })),
+  };
+}
+
+function assertCivilRange(start, end) {
+  for (const key of [start, end]) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !Number.isFinite(Date.parse(key + "T00:00:00Z")) || new Date(key + "T00:00:00Z").toISOString().slice(0, 10) !== key) throw new Error("Informe datas válidas.");
+  }
+  if (end < start) throw new Error("O término deve ser igual ou posterior ao início.");
+}
+
+function manageRestrictions(payload) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    ensureAllSheets();
+    if (payload.action === "restriction-list") return jsonResponse(adminRestrictionSnapshot());
+    const holiday = payload.kind === "holiday";
+    const records = holiday ? readHolidays() : readRestrictions();
+    const existing = records.find((r) => r.id === payload.id);
+    if (existing && payload.revision !== vacationRevision(existing)) throw new Error("Este registro mudou em outra tela. Atualize antes de editar novamente.");
+    if (!existing && payload.revision) throw new Error("O registro foi removido. Atualize os dados.");
+    if (typeof payload.id !== "string" || !/^[a-zA-Z0-9-]{1,100}$/.test(payload.id)) throw new Error("Identificador inválido.");
+    const next = records.filter((r) => r.id !== payload.id);
+    if (payload.action === "restriction-delete") {
+      if (!existing) throw new Error("Registro não encontrado.");
+    } else {
+      const start = String(payload.start || ""), end = holiday ? start : String(payload.end || "");
+      assertCivilRange(start, end);
+      if (holiday) {
+        const name = String(payload.note || "").trim();
+        if (!name) throw new Error("Informe o nome do feriado.");
+        next.push({ id: payload.id, date: start, name });
+      } else {
+        if (!readPeople().some((p) => p.id === payload.personId)) throw new Error("Selecione uma pessoa cadastrada.");
+        if (!["Férias", "Curso", "Atestado", "Outro impedimento"].includes(payload.type)) throw new Error("Tipo de restrição inválido.");
+        const r = { id: payload.id, personId: payload.personId, type: payload.type, start, end, note: String(payload.note || ""), vacationPeriod: null, vacationYear: null };
+        if (isTeamVacation(r)) {
+          r.vacationPeriod = Number(payload.vacationPeriod); r.vacationYear = Number(payload.vacationYear);
+          if (![1, 2, 3].includes(r.vacationPeriod) || !Number.isInteger(r.vacationYear) || r.vacationYear < 2000 || r.vacationYear > 2100) throw new Error("Informe período e competência válidos.");
+          try { validateTeamVacation(r, records); }
+          catch (error) {
+            if (payload.acceptWarnings !== true) return jsonResponse({ ok: false, warning: true, error: error.message });
+          }
+        }
+        next.push(r);
+      }
+    }
+    if (holiday) replaceSheetRows(SHEETS.holidays, HEADERS.holidays, next.map((r) => [r.id, r.date, r.name]));
+    else replaceSheetRows(SHEETS.restrictions, HEADERS.restrictions, next.map((r) => [r.id, r.personId, r.type, r.start, r.end, r.note || "", r.vacationPeriod || "", r.vacationYear || ""]));
+    const meta = readMeta();
+    writeMeta({ ...meta, version: String(Number(meta.version || 0) + 1), updated_at: new Date().toISOString(), source: "restricoes-admin" });
+    return jsonResponse(adminRestrictionSnapshot());
+  } catch (error) { return jsonResponse({ ok: false, error: error.message }); }
   finally { lock.releaseLock(); }
 }
 
@@ -282,7 +326,7 @@ function hasStateContent(state) {
   );
 }
 
-function writeNormalizedState(state) {
+function writeNormalizedState(state, options = {}) {
   const normalized = normalizeState(state);
   const peopleRows = normalized.people.map((person) => [person.id, person.name, person.baseShift]);
   const assignmentRows = [];
@@ -329,8 +373,10 @@ function writeNormalizedState(state) {
   replaceSheetRows(SHEETS.assignments, HEADERS.assignments, assignmentRows);
   replaceSheetRows(SHEETS.fixedAssignments, HEADERS.fixedAssignments, fixedRows);
   replaceSheetRows(SHEETS.monthlyShifts, HEADERS.monthlyShifts, monthlyRows);
-  replaceSheetRows(SHEETS.restrictions, HEADERS.restrictions, restrictionRows);
-  replaceSheetRows(SHEETS.holidays, HEADERS.holidays, holidayRows);
+  if (!options.scheduleOnly) {
+    replaceSheetRows(SHEETS.restrictions, HEADERS.restrictions, restrictionRows);
+    replaceSheetRows(SHEETS.holidays, HEADERS.holidays, holidayRows);
+  }
   replaceSheetRows(SHEETS.legacyImports, HEADERS.legacyImports, legacyRows);
 
   return {
