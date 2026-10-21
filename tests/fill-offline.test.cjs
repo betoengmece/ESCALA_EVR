@@ -8,7 +8,7 @@ function setup(refresh) {
   const label = { textContent: '' };
   const buttons = [{ disabled: false }, { disabled: false }, { disabled: false }];
   const errors = [];
-  const ctx = vm.createContext({ refreshCloudRestrictions: refresh, document: { getElementById: () => label }, els: { autoFill: buttons[0], validateSchedule: buttons[1], completeSchedule: buttons[2] }, alert: (message) => errors.push(message) });
+  const ctx = vm.createContext({ refreshCloudRestrictions: refresh, confirm: () => true, document: { getElementById: () => label }, els: { autoFill: buttons[0], validateSchedule: buttons[1], completeSchedule: buttons[2] }, alert: (message) => errors.push(message) });
   vm.runInContext(code, ctx);
   return { ctx, label, buttons, errors };
 }
@@ -29,4 +29,12 @@ test('algorithm errors are distinguished from sync errors and release buttons', 
   const h = setup(async () => {});
   await h.ctx.withCurrentRestrictions(() => { throw new Error('Algorithm failure'); });
   assert.match(h.errors[0], /Algorithm failure/); assert(h.buttons.every((b) => !b.disabled));
+});
+test('offline action is canceled when user declines stale data', async () => {
+  const h = setup(async () => { throw new Error('Offline'); });
+  h.ctx.confirm = () => false;
+  let calls = 0;
+  await h.ctx.withCurrentRestrictions(() => calls++);
+  assert.equal(calls, 0);
+  assert(h.buttons.every((button) => !button.disabled));
 });

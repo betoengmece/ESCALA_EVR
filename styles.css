@@ -526,6 +526,19 @@ body.sync-pending .main {
   background: #fff8dc;
 }
 
+.app-version-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+  color: #62666d;
+  font-size: 12px;
+}
+
+.app-version-bar small {
+  font-size: inherit;
+  white-space: nowrap;
+}
+
 .tab-page {
   display: none;
 }

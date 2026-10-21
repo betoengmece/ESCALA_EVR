@@ -1,3 +1,7 @@
+const APP_VERSION = "2026.10.21.2";
+const versionLabel = document.getElementById("app-version");
+if (versionLabel) versionLabel.textContent = `v${APP_VERSION}`;
+
 const STORAGE_KEY = "escala-evr-v1";
 const UNDO_STORAGE_KEY = "escala-evr-undo-v1";
 const SYNC_META_KEY = "escala-evr-sync-meta-v1";
@@ -2546,7 +2550,8 @@ function formatNameForCsv(name) {
 }
 
 function escapeCsvCell(value) {
-  const text = String(value ?? "");
+  const raw = String(value ?? "");
+  const text = /^\s*[=+@-]/.test(raw) || /^[\t\r\n]/.test(raw) ? `'${raw}` : raw;
   if (!/[;"\n\r]/.test(text)) return text;
   return `"${text.replace(/"/g, '""')}"`;
 }
@@ -2687,7 +2692,71 @@ function buildCsvRestrictionPlan(monthKeys) {
     });
 }
 
-function exportMonthCsv() {
+function csvValidationIssues(monthKeys) {
+  const errors = [];
+  const warnings = [];
+  monthKeys.forEach((key) => {
+    const day = getAssignments(key);
+    const seen = new Set();
+    if (day["24x72"].length > 2) errors.push(`${formatDate(key)}: mais de dois cards de 24h.`);
+    const covered = day["24x72"].filter((id) => !isEmptySlot(id)).length;
+    if (covered < 2) warnings.push(`${formatDate(key)}: ${2 - covered} vaga(s) de 24h sem pessoa.`);
+    SHIFT_TYPES.forEach((shift) => day[shift].forEach((id) => {
+      if (isEmptySlot(id)) return;
+      const person = findPerson(id);
+      if (!person) {
+        errors.push(`${formatDate(key)}: pessoa não cadastrada (${id}).`);
+        return;
+      }
+      const prefix = `${formatDate(key)} - ${person.name}`;
+      if (seen.has(id)) errors.push(`${prefix}: pessoa repetida no mesmo dia.`);
+      seen.add(id);
+      cardRuleIssues(person, key, shift).forEach((issue) => {
+        (issue.category === "rotation-repeat" ? warnings : errors).push(`${prefix}: ${issue.message}`);
+      });
+      const balance = restBalanceForAssignment(id, key);
+      if (balance > 0) errors.push(`${prefix}: índice de descanso +${balance}.`);
+      if (shift === "Comercial" && !isBusinessWorkday(key)) errors.push(`${prefix}: comercial em dia não útil.`);
+    }));
+  });
+  state.people.filter((person) => countMonthTotalAssignments(person.id, monthKeys) === 0)
+    .forEach((person) => warnings.push(`${person.name}: sem plantão no mês.`));
+  state.restrictions.filter((restriction) => isVacationRestriction(restriction)
+    && restriction.start <= monthKeys[monthKeys.length - 1] && restriction.end >= monthKeys[0])
+    .forEach((restriction) => vacationRuleIssues(restriction, restriction.id).forEach((issue) =>
+      warnings.push(`${findPerson(restriction.personId)?.name || "Pessoa"}: ${issue.message}`)));
+  return { errors: [...new Set(errors)], warnings: [...new Set(warnings)] };
+}
+
+async function exportMonthCsv() {
+  if (scheduleActionBusy) return;
+  scheduleActionBusy = true;
+  if (els.exportCsv) els.exportCsv.disabled = true;
+  const selectedKey = monthKey();
+  try {
+    await refreshCloudRestrictions();
+    if (monthKey() !== selectedKey) {
+      alert("O mês selecionado mudou durante a consulta. Clique novamente em exportar para validar o novo mês.");
+      return;
+    }
+    const issues = csvValidationIssues(getMonthKeys());
+    if (issues.errors.length) {
+      alert(`Exportação bloqueada. Corrija os problemas abaixo:\n\n${issues.errors.join("\n")}`);
+      return;
+    }
+    if (syncMeta.observedVersion !== syncMeta.version) issues.warnings.unshift("A versão da nuvem é diferente da versão local. A escala não foi baixada automaticamente; confira antes de usar esta cópia.");
+    if (syncMeta.dirty) issues.warnings.unshift("Há alterações locais ainda não enviadas à nuvem. O CSV usará a escala deste aparelho.");
+    if (issues.warnings.length && !confirm(`Pendências encontradas:\n\n${issues.warnings.join("\n")}\n\nExportar mesmo assim?`)) return;
+    downloadValidatedMonthCsv();
+  } catch (error) {
+    alert(`Exportação interrompida: não foi possível atualizar e validar os dados. Nenhum CSV foi gerado. ${error.message || error}`);
+  } finally {
+    scheduleActionBusy = false;
+    if (els.exportCsv) els.exportCsv.disabled = false;
+  }
+}
+
+function downloadValidatedMonthCsv() {
   const selectedMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
   const selectedMonthLabel = selectedMonth.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
   const shouldExport = confirm(
@@ -2766,14 +2835,18 @@ function updateSyncStatus(message = null, tone = "") {
     els.syncStatus.textContent = message;
     return;
   }
+  if (syncMeta.observedVersion != null && syncMeta.observedVersion !== syncMeta.version) {
+    els.syncStatus.textContent = `Nuvem: versão v${syncMeta.observedVersion}; cópia local v${syncMeta.version}. Confira Baixar da nuvem.${syncMeta.dirty ? " Há alterações locais não enviadas." : ""}`;
+    els.syncStatus.classList.add("dirty");
+    return;
+  }
   if (syncMeta.dirty) {
     els.syncStatus.textContent = `Nuvem: alterações locais${syncMeta.version ? ` (v${syncMeta.version})` : ""}`;
     els.syncStatus.classList.add("dirty");
     return;
   }
   if (syncMeta.version) {
-    els.syncStatus.textContent = `Nuvem: sincronizado v${syncMeta.version}${syncMeta.updatedAt ? ` - ${syncDateLabel(syncMeta.updatedAt)}` : ""}`;
-    els.syncStatus.classList.add("ok");
+    els.syncStatus.textContent = `Última transferência: v${syncMeta.version}${syncMeta.lastSyncedAt ? ` - ${syncDateLabel(syncMeta.lastSyncedAt)}` : ""}. Restrições são atualizadas separadamente.`;
     return;
   }
   els.syncStatus.textContent = "Nuvem: não sincronizado";
@@ -2884,8 +2957,8 @@ function assertCloudCivilDates(cloudState) {
 }
 
 async function pullFromCloud() {
-  const previousState = structuredClone(state);
-  const previousSyncMeta = { ...syncMeta };
+  let previousState = null;
+  let previousSyncMeta = null;
   try {
     setSyncBusy(true);
     updateSyncStatus("Nuvem: baixando...", "busy");
@@ -2903,6 +2976,8 @@ async function pullFromCloud() {
     const previousRawState = localStorage.getItem(STORAGE_KEY);
     const restoredState = normalizeLoadedState(data.state);
     assertValidLoadedState(restoredState);
+    previousState = structuredClone(state);
+    previousSyncMeta = { ...syncMeta };
     state = restoredState;
     syncMeta = {
       version: Number(data.version || 0),
@@ -2917,8 +2992,8 @@ async function pullFromCloud() {
     persistSyncMeta();
     alert("Escala baixada da nuvem com sucesso.");
   } catch (error) {
-    state = previousState;
-    syncMeta = previousSyncMeta;
+    if (previousState) state = previousState;
+    if (previousSyncMeta) syncMeta = previousSyncMeta;
     try {
       renderAll();
     } catch (renderError) {
@@ -2957,14 +3032,18 @@ function applyCloudRestrictions(data) {
   if (data.restrictionStorage !== "independent-v1") throw new Error("Atualize a implantação do Apps Script para ativar as restrições independentes.");
   if (!data.exists || !data.state || !Array.isArray(data.state.restrictions) || !Array.isArray(data.state.holidays)) throw new Error("A nuvem ainda não possui os dados das restrições.");
   assertCloudCivilDates(data.state);
+  syncMeta.observedVersion = Number(data.version || 0);
   const changed = JSON.stringify(state.restrictions) !== JSON.stringify(data.state.restrictions) || JSON.stringify(state.holidays) !== JSON.stringify(data.state.holidays);
   state.restrictions = structuredClone(data.state.restrictions);
   state.holidays = structuredClone(data.state.holidays);
-  saveState({ skipUndo: true, skipSyncDirty: true });
-  renderAll();
+  if (changed) {
+    saveState({ skipUndo: true, skipSyncDirty: true });
+    renderAll();
+  }
+  updateSyncStatus();
   const conflicts = getMonthKeys().reduce((sum, key) => sum + SHIFT_TYPES.reduce((count, shift) => count + getAssignments(key)[shift].filter((id) => isRestricted(id, key) || (shift === "24x72" && isDayBeforeVacation(id, key))).length, 0), 0);
   const label = document.getElementById("restriction-sync-status");
-  if (label) label.textContent = `Restrições atualizadas da nuvem.${conflicts ? ` ${conflicts} card(s) com impedimento no mês; confira os avisos na escala.` : ""}`;
+  if (label) label.textContent = `Restrições conferidas em ${syncDateLabel(new Date().toISOString())}.${conflicts ? ` ${conflicts} card(s) com impedimento no mês; confira os avisos na escala.` : ""}`;
   return changed && conflicts > 0;
 }
 
@@ -2978,7 +3057,7 @@ let scheduleActionBusy = false;
 async function withCurrentRestrictions(action) {
   if (scheduleActionBusy) return;
   scheduleActionBusy = true;
-  const buttons = [els.autoFill, els.validateSchedule, els.completeSchedule].filter(Boolean);
+  const buttons = [els.autoFill, els.validateSchedule, els.completeSchedule, els.exportCsv].filter(Boolean);
   const previousDisabled = buttons.map((button) => button.disabled);
   buttons.forEach((button) => { button.disabled = true; });
   const label = document.getElementById("restriction-sync-status");
@@ -2987,8 +3066,9 @@ async function withCurrentRestrictions(action) {
     try { await refreshCloudRestrictions(); }
     catch (error) {
       if (label) label.textContent = `Usando as restrições salvas neste aparelho. Não foi possível atualizar a nuvem: ${error.name === "AbortError" ? "tempo de resposta excedido" : error.message}. Confira novos impedimentos antes de enviar a escala.`;
+      if (!confirm("Não foi possível consultar as restrições atuais na nuvem. Os dados deste aparelho podem estar desatualizados. Deseja continuar mesmo assim usando a cópia local?")) return;
     }
-    action();
+    await action();
   } catch (error) {
     alert(`Não foi possível concluir esta ação na escala. ${error.message}`);
   } finally {
@@ -3054,7 +3134,7 @@ async function pushToCloud(force = false, authorized = false) {
     saveState({ skipSyncDirty: true });
     renderAll();
     persistSyncMeta();
-    updateSyncStatus("Nuvem: enviado com sucesso", "ok");
+    updateSyncStatus(changedDuringUpload ? "Nuvem: envio concluído, mas há novas alterações locais ainda não enviadas." : "Nuvem: enviado com sucesso", changedDuringUpload ? "dirty" : "ok");
     setTimeout(() => updateSyncStatus(), 1800);
   } catch (error) {
     updateSyncStatus("Nuvem: erro ao enviar", "error");
@@ -4152,4 +4232,11 @@ function updateRestrictionCache() {
   });
 }
 window.addEventListener("focus", updateRestrictionCache);
+window.addEventListener("online", updateRestrictionCache);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) updateRestrictionCache();
+});
+setInterval(() => {
+  if (!document.hidden) updateRestrictionCache();
+}, 60000);
 updateRestrictionCache();
