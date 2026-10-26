@@ -1,4 +1,4 @@
-const APP_VERSION = "2026.10.21.2";
+const APP_VERSION = "2026.10.26.1";
 const versionLabel = document.getElementById("app-version");
 if (versionLabel) versionLabel.textContent = `v${APP_VERSION}`;
 
@@ -2715,7 +2715,13 @@ function csvValidationIssues(monthKeys) {
         (issue.category === "rotation-repeat" ? warnings : errors).push(`${prefix}: ${issue.message}`);
       });
       const balance = restBalanceForAssignment(id, key);
-      if (balance > 0) errors.push(`${prefix}: índice de descanso +${balance}.`);
+      if (balance > 0) {
+        if (isRestrictionSuspendedRestBalance(id, key)) {
+          warnings.push(`${prefix}: índice de descanso +${balance} após período de restrição (curso ou impedimento). Confira o retorno antes de exportar.`);
+        } else {
+          errors.push(`${prefix}: índice de descanso +${balance}.`);
+        }
+      }
       if (shift === "Comercial" && !isBusinessWorkday(key)) errors.push(`${prefix}: comercial em dia não útil.`);
     }));
   });

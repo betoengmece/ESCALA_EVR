@@ -24,6 +24,7 @@ function setup(refresh = async () => {}) {
     isEmptySlot: (id) => id === 'vazio', findPerson: (id) => ctx.state.people.find((p) => p.id === id),
     countMonthTotalAssignments: (id) => Object.values(day).flat().filter((v) => v === id).length,
     cardRuleIssues: () => [], restBalanceForAssignment: () => 0,
+    isRestrictionSuspendedRestBalance: () => false,
     isBusinessWorkday: () => true, isVacationRestriction: () => false,
     refreshCloudRestrictions: refresh,
     alert: (m) => alerts.push(m), confirm: (m) => { confirmations.push(m); return true; },
@@ -68,6 +69,39 @@ test('empty slots and unsent changes require explicit confirmation', async () =>
   assert.equal(h.downloads(), 0);
   assert.match(h.confirmations[0], /não enviadas/);
   assert.match(h.confirmations[0], /vaga/);
+});
+test('positive rest after an impediment warns and allows confirmed export', async () => {
+  const h = setup();
+  h.ctx.restBalanceForAssignment = () => 1;
+  h.ctx.isRestrictionSuspendedRestBalance = () => true;
+  await h.ctx.exportMonthCsv();
+  assert.equal(h.alerts.length, 0);
+  assert.match(h.confirmations[0], /após período de restrição/);
+  assert.equal(h.downloads(), 1);
+});
+test('post-impediment warning can be declined', async () => {
+  const h = setup();
+  h.ctx.restBalanceForAssignment = () => 1;
+  h.ctx.isRestrictionSuspendedRestBalance = () => true;
+  h.ctx.confirm = () => false;
+  await h.ctx.exportMonthCsv();
+  assert.equal(h.downloads(), 0);
+});
+test('active impediment still blocks despite a suspended rest index', async () => {
+  const h = setup();
+  h.ctx.restBalanceForAssignment = () => 1;
+  h.ctx.isRestrictionSuspendedRestBalance = () => true;
+  h.ctx.cardRuleIssues = () => [{ category: 'restriction', message: 'Impedimento ativo' }];
+  await h.ctx.exportMonthCsv();
+  assert.equal(h.downloads(), 0);
+  assert.match(h.alerts[0], /Impedimento ativo/);
+});
+test('ordinary positive rest still blocks without any other errors', async () => {
+  const h = setup();
+  h.ctx.restBalanceForAssignment = () => 1;
+  await h.ctx.exportMonthCsv();
+  assert.equal(h.downloads(), 0);
+  assert.match(h.alerts[0], /descanso \+1/);
 });
 test('changing month during refresh cancels export', async () => {
   const h = setup(async () => { h.ctx.monthKey = () => '2026-11'; });
