@@ -1,4 +1,4 @@
-const APP_VERSION = "2026.10.27.1";
+const APP_VERSION = "2026.10.27.2";
 const versionLabel = document.getElementById("app-version");
 if (versionLabel) versionLabel.textContent = `v${APP_VERSION}`;
 
@@ -821,15 +821,29 @@ function calculateNationalHolidayName(key) {
   return holidays[match[2]] || null;
 }
 
+function localHolidayName(key) {
+  const holidays = {
+    "2026-05-11": "Aniversário de Mundo Novo (transferido)",
+    "2026-10-11": "Criação de Mato Grosso do Sul",
+    "2026-11-27": "Nossa Senhora das Graças, padroeira de Mundo Novo",
+    "2027-05-13": "Aniversário de Mundo Novo",
+    "2027-10-11": "Criação de Mato Grosso do Sul",
+    "2027-11-27": "Nossa Senhora das Graças, padroeira de Mundo Novo",
+  };
+  return holidays[key] || null;
+}
+
 function isHoliday(key) {
-  return Boolean(nationalHolidayName(key)) || state.holidays.some((holiday) => holiday.date === key);
+  return Boolean(nationalHolidayName(key) || localHolidayName(key)) || state.holidays.some((holiday) => holiday.date === key);
 }
 
 function holidayLabelsForDay(key) {
   const registered = state.holidays.filter((holiday) => holiday.date === key);
   const nationalName = nationalHolidayName(key);
+  const localName = localHolidayName(key);
   const labels = registered.map((holiday) => `Feriado: ${holiday.name}`);
   if (nationalName && !registered.length) labels.unshift(`Feriado nacional: ${nationalName}`);
+  if (localName && !registered.length) labels.unshift(`Feriado local: ${localName}`);
   return labels;
 }
 

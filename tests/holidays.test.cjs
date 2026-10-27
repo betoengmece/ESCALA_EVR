@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../app.js'), 'utf8');
 function setup() {
   const ctx = vm.createContext({ state: { holidays: [], restrictions: [] } });
-  const names = ['dateKey', 'nationalHolidayName', 'calculateNationalHolidayName', 'isHoliday', 'holidayLabelsForDay',
+  const names = ['dateKey', 'nationalHolidayName', 'calculateNationalHolidayName', 'localHolidayName', 'isHoliday', 'holidayLabelsForDay',
     'dayDistance', 'addDaysKey', 'isWeekend', 'isBusinessWorkday', 'isRestSuspendedDay', 'hasPersonalRestrictionDay',
     'suspensionDaysBetween', 'effectiveDayDistance', 'commercialEffectiveDayDistance', 'effectiveHoursBetween'];
   const functions = names.map((name) => {
@@ -24,6 +24,18 @@ test('national holidays recur and Good Friday follows Easter', () => {
   }
   assert.equal(h.isHoliday('2026-06-04'), false); // Corpus Christi depends on local rules.
   assert.equal(h.isHoliday('2025-12-25'), false); // Existing historical schedules are unchanged.
+});
+test('Mundo Novo and state holidays include the 2026 transfer and 2027 dates', () => {
+  const h = setup();
+  for (const date of ['2026-05-11', '2026-10-11', '2026-11-27', '2027-05-13', '2027-10-11', '2027-11-27']) {
+    assert.equal(h.isHoliday(date), true, date);
+    assert.match(h.holidayLabelsForDay(date)[0], /Feriado local/);
+  }
+  assert.equal(h.isHoliday('2026-05-13'), false);
+  assert.equal(h.isBusinessWorkday('2027-05-13'), false);
+  assert.equal(h.isBusinessWorkday('2027-10-11'), false);
+  assert.equal(h.effectiveHoursBetween('a', '2027-05-12', '2027-05-14', 'Comercial'), 24);
+  assert.equal(h.effectiveHoursBetween('a', '2027-05-12', '2027-05-14', '24x72'), 48);
 });
 test('national and registered local holidays affect commercial workdays only', () => {
   const h = setup();
